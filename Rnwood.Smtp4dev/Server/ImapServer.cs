@@ -17,7 +17,6 @@ using System.Threading;
 using Microsoft.AspNetCore.Http;
 using Org.BouncyCastle.Utilities.Net;
 using Rnwood.Smtp4dev.Server.Settings;
-using DeepEqual.Syntax;
 using MailKit.Net.Imap;
 
 namespace Rnwood.Smtp4dev.Server
@@ -36,15 +35,39 @@ namespace Rnwood.Smtp4dev.Server
 
         }
 
+        /// <summary>
+        /// The subset of <see cref="ServerOptions"/> which is read while the IMAP listener is being created.
+        /// A change to one of these can only take effect by restarting the listener. Every other option is read
+        /// at the point of use, so changing it must not disturb connections which are already established.
+        ///
+        /// Keep this in sync when adding an option which affects the listener.
+        /// </summary>
+        internal readonly record struct ImapListenerConfig(
+            int? ImapPort,
+            string BindAddress,
+            bool AllowRemoteConnections,
+            bool DisableIPv6,
+            string HostName)
+        {
+            public static ImapListenerConfig From(ServerOptions options) => new(
+                options.ImapPort,
+                options.BindAddress,
+                options.AllowRemoteConnections,
+                options.DisableIPv6,
+                options.HostName);
+        }
+
         private void OnServerOptionsChanged(ServerOptions serverOptions)
         {
-            if (serverOptions.IsDeepEqual(this.lastStartOptions))
+            if (ImapListenerConfig.From(serverOptions) == this.lastListenerConfig)
             {
+                log.Debug("ServerOptions changed but no IMAP listener settings were affected. Not restarting the server.");
                 return;
             }
 
             if (IsRunning)
             {
+                log.Information("IMAP listener configuration changed. Restarting server...");
                 Stop();
 
                 TryStart();
@@ -61,7 +84,7 @@ namespace Rnwood.Smtp4dev.Server
 
         public async void TryStart()
         {
-            this.lastStartOptions = serverOptions.CurrentValue with { };
+            this.lastListenerConfig = ImapListenerConfig.From(serverOptions.CurrentValue);
 
             if (!serverOptions.CurrentValue.ImapPort.HasValue)
             {
@@ -195,7 +218,7 @@ namespace Rnwood.Smtp4dev.Server
 
         private IMAP_Server imapServer;
         private IOptionsMonitor<ServerOptions> serverOptions;
-        private ServerOptions lastStartOptions;
+        private ImapListenerConfig lastListenerConfig;
         private readonly IServiceScopeFactory serviceScopeFactory;
         private readonly ScriptingHost scriptingHost;
         private readonly ILogger log = Log.ForContext<ImapServer>();
