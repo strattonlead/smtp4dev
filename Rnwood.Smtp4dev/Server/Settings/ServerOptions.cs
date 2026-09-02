@@ -12,6 +12,16 @@ using Esprima.Ast;
 
 namespace Rnwood.Smtp4dev.Server.Settings
 {
+    /// <summary>
+    /// Settings for the server. These are re-read whenever the settings change, so most of them are read at the
+    /// point of use and take effect immediately.
+    ///
+    /// The exceptions are the options which the SMTP and IMAP listeners read while they are being created.
+    /// Changing one of those restarts the relevant listener, which terminates every session which is in
+    /// progress. Those options are listed in <c>Smtp4devServer.SmtpListenerConfig</c> and
+    /// <c>ImapServer.ImapListenerConfig</c>; add a new option to the relevant one if the listener needs to be
+    /// recreated for it to take effect.
+    /// </summary>
     public record ServerOptions
     {
         private string database = "database.db";

@@ -73,23 +73,101 @@ namespace Rnwood.Smtp4dev.Server
             obs.Throttle(TimeSpan.FromMilliseconds(100)).Subscribe(OnServerOptionsChanged);
         }
 
+        /// <summary>
+        /// The subset of <see cref="Settings.ServerOptions"/> which is read while the SMTP listener is being
+        /// created - either directly by <see cref="CreateSmtpServer"/> or indirectly by
+        /// <see cref="CertificateHelper.GetTlsCertificate"/>. A change to one of these can only take effect by
+        /// restarting the listener. Every other option is read at the point of use, so changing it must not
+        /// disturb connections which are already established.
+        ///
+        /// Keep this in sync when adding an option which affects the listener.
+        /// </summary>
+        internal readonly record struct SmtpListenerConfig(
+            int Port,
+            string BindAddress,
+            bool AllowRemoteConnections,
+            bool DisableIPv6,
+            string HostName,
+            TlsMode TlsMode,
+            string SslProtocols,
+            string TlsCipherSuites,
+            long? MaxMessageSize,
+            bool AuthenticationRequired,
+            string SmtpEnabledAuthTypesWhenNotSecureConnection,
+            string SmtpEnabledAuthTypesWhenSecureConnection,
+            string TlsCertificate,
+            string TlsCertificatePrivateKey,
+            string TlsCertificateStoreThumbprint,
+            string TlsCertificatePassword)
+        {
+            public static SmtpListenerConfig From(Settings.ServerOptions options) => new(
+                options.Port,
+                options.BindAddress,
+                options.AllowRemoteConnections,
+                options.DisableIPv6,
+                options.HostName,
+                options.TlsMode,
+                options.SslProtocols,
+                options.TlsCipherSuites,
+                options.MaxMessageSize,
+                options.AuthenticationRequired,
+                options.SmtpEnabledAuthTypesWhenNotSecureConnection,
+                options.SmtpEnabledAuthTypesWhenSecureConnection,
+                options.TlsCertificate,
+                options.TlsCertificatePrivateKey,
+                options.TlsCertificateStoreThumbprint,
+                options.TlsCertificatePassword);
+        }
+
         private void OnServerOptionsChanged(Settings.ServerOptions arg1)
         {
-            if (arg1.IsDeepEqual(this.lastStartOptions))
+            if (arg1.IsDeepEqual(this.lastAppliedOptions))
             {
                 return;
             }
 
-            if (this.smtpServer?.IsRunning == true)
+            Settings.ServerOptions previousOptions = this.lastAppliedOptions;
+            this.lastAppliedOptions = arg1 with { };
+
+            if (SmtpListenerConfig.From(arg1) != this.lastListenerConfig)
             {
-                log.Information("ServerOptions changed. Restarting server...");
-                Stop();
-                TryStart();
+                if (this.smtpServer?.IsRunning == true)
+                {
+                    log.Information("SMTP listener configuration changed. Restarting server...");
+                    Stop();
+                    TryStart();
+                }
+                else
+                {
+                    log.Information("SMTP listener configuration changed.");
+                }
+
+                return;
             }
-            else
+
+            log.Debug("ServerOptions changed but no SMTP listener settings were affected. Not restarting the server.");
+
+            if (MailboxOrRetentionOptionsChanged(previousOptions, arg1))
             {
-                log.Information("ServerOptions changed.");
+                log.Information("Mailbox or retention configuration changed. Applying it without restarting the server.");
+                taskQueue.QueueTask(ApplyConfigurationChanges, true);
             }
+        }
+
+        /// <summary>
+        /// Determines whether the options which <see cref="ApplyConfigurationToDatabase"/> acts on have changed.
+        /// These are applied without restarting the listener.
+        /// </summary>
+        private static bool MailboxOrRetentionOptionsChanged(Settings.ServerOptions previousOptions, Settings.ServerOptions newOptions)
+        {
+            if (previousOptions == null)
+            {
+                return true;
+            }
+
+            return !newOptions.Mailboxes.IsDeepEqual(previousOptions.Mailboxes)
+                   || newOptions.NumberOfMessagesToKeep != previousOptions.NumberOfMessagesToKeep
+                   || newOptions.NumberOfSessionsToKeep != previousOptions.NumberOfSessionsToKeep;
         }
 
         private void CreateSmtpServer()
@@ -243,11 +321,30 @@ namespace Rnwood.Smtp4dev.Server
 
         private void DoCleanup()
         {
-            //Mark sessions as ended.
             using var scope = serviceScopeFactory.CreateScope();
             Smtp4devDbContext dbContext = scope.ServiceProvider.GetService<Smtp4devDbContext>();
+
+            //Mark sessions as ended.
             dbContext.Sessions.Where(s => !s.EndDate.HasValue).ExecuteUpdate(u => u.SetProperty(s => s.EndDate, DateTime.Now));
 
+            ApplyConfigurationToDatabase(dbContext);
+        }
+
+        /// <summary>
+        /// Reconciles the database with the current mailbox and retention configuration without touching the
+        /// listener or any session which is in progress. Queued when those settings change so that, for example,
+        /// a mailbox added at runtime can receive messages without the server being restarted.
+        /// </summary>
+        private void ApplyConfigurationChanges()
+        {
+            using var scope = serviceScopeFactory.CreateScope();
+            Smtp4devDbContext dbContext = scope.ServiceProvider.GetService<Smtp4devDbContext>();
+
+            ApplyConfigurationToDatabase(dbContext);
+        }
+
+        private void ApplyConfigurationToDatabase(Smtp4devDbContext dbContext)
+        {
             //Find mailboxes in config not in DB and create
             var serverOptionsCurrentValue = this.serverOptions.CurrentValue;
             var configuredMailboxesAndDefault = serverOptionsCurrentValue.Mailboxes.Concat(new[] { new MailboxOptions { Name = MailboxOptions.DEFAULTNAME } });
@@ -894,6 +991,8 @@ namespace Rnwood.Smtp4dev.Server
         private readonly NotificationsHub notificationsHub;
         private readonly IServiceScopeFactory serviceScopeFactory;
         private Settings.ServerOptions lastStartOptions;
+        private Settings.ServerOptions lastAppliedOptions;
+        private SmtpListenerConfig lastListenerConfig;
         private int messagesDeliveredToStdoutCount = 0;
         private readonly object stdoutLock = new object();
 
@@ -909,6 +1008,8 @@ namespace Rnwood.Smtp4dev.Server
             {
                 this.Exception = null;
                 this.lastStartOptions = this.serverOptions.CurrentValue with { };
+                this.lastAppliedOptions = this.lastStartOptions;
+                this.lastListenerConfig = SmtpListenerConfig.From(this.lastStartOptions);
 
                 DoCleanup();
                 CreateSmtpServer();
