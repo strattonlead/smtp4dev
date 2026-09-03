@@ -1,0 +1,153 @@
+name: Build
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  DOTNET_VERSION: '10.0.x'
+  NODE_VERSION: '20'
+  DOTNET_NOLOGO: 'true'
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 'true'
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: Rnwood.Smtp4dev/ClientApp/package-lock.json
+
+      - name: Restore
+        run: dotnet restore Rnwood.Smtp4dev.Tests/Rnwood.Smtp4dev.Tests.csproj
+
+      - name: Build
+        run: dotnet build Rnwood.Smtp4dev.Tests/Rnwood.Smtp4dev.Tests.csproj -c Release --no-restore
+
+      - name: Test
+        # GitHub hosted runners have no IPv6 stack. ImapServer binds IPAddress.IPv6Any with no
+        # AddressFamilyNotSupported fallback, so without --disableipv6 the IMAP listener fails to
+        # start and every E2E test burns its full 180s startup timeout.
+        #
+        # WebUI tests need Playwright browsers and MemoryLeakStress is a long running stress test,
+        # so both are excluded here.
+        env:
+          SMTP4DEV_E2E_ARGS: --disableipv6
+        run: >
+          dotnet test Rnwood.Smtp4dev.Tests/Rnwood.Smtp4dev.Tests.csproj
+          -c Release --no-build
+          --filter "FullyQualifiedName!~E2E.WebUI&FullyQualifiedName!~MemoryLeakStress"
+          --logger "trx;LogFileName=test-results.trx"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: '**/TestResults/*.trx'
+          if-no-files-found: warn
+
+  publish:
+    name: Publish ${{ matrix.rid }}
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # All of these cross compile from the x64 runner - a self contained publish just pulls the
+        # target runtime pack from NuGet, so the arm targets need no extra runner or emulation.
+        rid:
+          - linux-x64
+          - linux-musl-x64
+          - linux-arm
+          - linux-arm64
+          - win-x64
+          - win-arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: Rnwood.Smtp4dev/ClientApp/package-lock.json
+
+      - name: Publish
+        run: |
+          set -euo pipefail
+          version_arg=()
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version_arg=("-p:Version=${GITHUB_REF#refs/tags/v}")
+          fi
+          dotnet publish Rnwood.Smtp4dev/Rnwood.Smtp4dev.csproj \
+            -c Release \
+            -r "${{ matrix.rid }}" \
+            --self-contained \
+            -p:PublishSingleFile=true \
+            "${version_arg[@]}" \
+            -o "out/${{ matrix.rid }}"
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          if [[ "${{ matrix.rid }}" == win-* ]]; then
+            (cd out && zip -qr "../dist/smtp4dev-${{ matrix.rid }}.zip" "${{ matrix.rid }}")
+          else
+            tar -czf "dist/smtp4dev-${{ matrix.rid }}.tar.gz" -C out "${{ matrix.rid }}"
+          fi
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: smtp4dev-${{ matrix.rid }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: smtp4dev-*
+          merge-multiple: true
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF#refs/tags/}"
+          gh release create "$tag" dist/* --title "$tag" --generate-notes
