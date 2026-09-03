@@ -263,3 +263,6 @@ out/
 # VS Code debugging profiles
 .chrome-debug-profile*
 .edge-debug-profile*
+
+# Build output from .github/workflows/build.yml
+dist/
