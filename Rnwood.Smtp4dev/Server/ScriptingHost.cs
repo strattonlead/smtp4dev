@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -107,7 +107,7 @@ public class ScriptingHost
     {
         jsEngine.SetValue("error", (Action<int?, string>)((code, message) => throw new SmtpServerException(new SmtpResponse(code ?? (int)StandardSmtpResponseCode.TransactionFailed, message ?? ""))));
 
-        jsEngine.SetValue("delay", (Func<double, bool>)(seconds => { Thread.Sleep(seconds == -1 ? TimeSpan.MaxValue : TimeSpan.FromSeconds(seconds)); return true; }));
+        jsEngine.SetValue("delay", (Func<double, bool>)(seconds => Delay(seconds, connection)));
 
         jsEngine.SetValue("random", (Func<int, int, int>)((minValue, maxValue) => Random.Shared.Next(minValue, maxValue)));
 
@@ -120,6 +120,50 @@ public class ScriptingHost
         }));
         ;
 
+    }
+
+    /// <summary>
+    /// How often a delay checks whether its connection is still there. Short enough that a
+    /// disconnect frees the thread promptly, long enough that a delay costs no measurable CPU.
+    /// </summary>
+    private static readonly TimeSpan DelayPollInterval = TimeSpan.FromMilliseconds(100);
+
+    /// <summary>
+    /// Waits for <paramref name="seconds"/>, or until the connection goes away, whichever comes
+    /// first. <c>-1</c> means "until the connection goes away".
+    /// </summary>
+    /// <remarks>
+    /// This polls rather than waiting on the connection closed event, because while an expression
+    /// is running nothing is reading the socket, so a client which disconnects mid delay raises no
+    /// event at all.
+    ///
+    /// A delay which outlives its connection parks an OS thread for nothing, and expressions are
+    /// global: one tenant's timeout rule is evaluated on every tenant's commands, so the threads
+    /// it parks are everyone's. That is why this is bounded by the connection rather than only by
+    /// the requested duration.
+    /// </remarks>
+    private bool Delay(double seconds, IConnection connection)
+    {
+        bool indefinite = seconds == -1;
+        DateTime deadline = indefinite ? DateTime.MaxValue : DateTime.UtcNow.AddSeconds(seconds);
+
+        while (true)
+        {
+            if (connection != null && !connection.IsConnected)
+            {
+                log.Debug("delay({seconds}) returned early because the connection closed", seconds);
+                return true;
+            }
+
+            TimeSpan remaining = indefinite ? DelayPollInterval : deadline - DateTime.UtcNow;
+
+            if (remaining <= TimeSpan.Zero)
+            {
+                return true;
+            }
+
+            Thread.Sleep(remaining < DelayPollInterval ? remaining : DelayPollInterval);
+        }
     }
 
     public IReadOnlyCollection<string> GetAutoRelayRecipients(ApiModel.Message message, string recipient, ApiModel.Session session)

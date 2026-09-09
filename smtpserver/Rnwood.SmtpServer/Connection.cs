@@ -89,6 +89,9 @@ public class Connection : IConnection
     public async Task CloseConnection() => await ConnectionChannel.Close().ConfigureAwait(false);
 
     /// <inheritdoc />
+    public bool IsConnected => ConnectionChannel.IsConnected && !ConnectionChannel.IsPeerDisconnected;
+
+    /// <inheritdoc />
     public async Task CommitMessage()
     {
         IMessage message = await CurrentMessage.ToMessage().ConfigureAwait(false);

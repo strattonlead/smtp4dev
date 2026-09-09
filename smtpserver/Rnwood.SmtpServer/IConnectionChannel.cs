@@ -33,6 +33,17 @@ public interface IConnectionChannel : IDisposable
     bool IsConnected { get; }
 
     /// <summary>
+    ///     Gets a value indicating whether the peer has closed its end of the connection.
+    /// </summary>
+    /// <remarks>
+    ///     <see cref="IsConnected" /> only records whether this end has closed the channel, so it
+    ///     stays true after a client disconnects until the next read or write fails. Code which
+    ///     waits without reading - a scripted delay, for example - needs to know the connection has
+    ///     gone before it next touches the stream, so this probes the socket instead.
+    /// </remarks>
+    bool IsPeerDisconnected { get; }
+
+    /// <summary>
     ///     Gets or sets the receive timeout after which if data is expected but not received, the connection will be
     ///     terminated.
     /// </summary>

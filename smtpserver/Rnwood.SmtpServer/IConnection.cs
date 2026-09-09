@@ -1,4 +1,4 @@
-// <copyright file="IConnection.cs" company="Rnwood.SmtpServer project contributors">
+﻿// <copyright file="IConnection.cs" company="Rnwood.SmtpServer project contributors">
 // Copyright (c) Rnwood.SmtpServer project contributors. All rights reserved.
 // Licensed under the BSD license. See LICENSE.md file in the project root for full license information.
 // </copyright>
@@ -108,4 +108,10 @@ public interface IConnection
     ///     Gets a value indicating whether the last line read had a bare line feed (LF without CR).
     /// </summary>
     bool LastLineHadBareLineFeed { get; }
+
+    /// <summary>
+    ///     Gets a value indicating whether the connection is still usable: this end has not closed
+    ///     the channel and the peer has not closed its end.
+    /// </summary>
+    bool IsConnected { get; }
 }

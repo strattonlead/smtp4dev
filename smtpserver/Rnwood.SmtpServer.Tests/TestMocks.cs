@@ -62,6 +62,8 @@ public class TestMocks
                 sb.ValidateAuthenticationCredentials(It.IsAny<IConnection>(),
                     It.IsAny<IAuthenticationCredentials>())).Returns(Task.FromResult(AuthenticationResult.Failure));
 
+        ConnectionChannel.SetupGet(c => c.IsPeerDisconnected).Returns(false);
+
         Connection.SetupAllProperties();
         Connection.SetupGet(c => c.Session).Returns(Session.Object);
         Connection.SetupGet(c => c.Server).Returns(Server.Object);
