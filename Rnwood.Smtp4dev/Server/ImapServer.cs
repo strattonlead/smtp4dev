@@ -8,6 +8,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Reactive.Linq;
+using System.Security.Cryptography.X509Certificates;
 using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 using System.Net.NetworkInformation;
@@ -36,25 +37,48 @@ namespace Rnwood.Smtp4dev.Server
         }
 
         /// <summary>
-        /// The subset of <see cref="ServerOptions"/> which is read while the IMAP listener is being created.
-        /// A change to one of these can only take effect by restarting the listener. Every other option is read
-        /// at the point of use, so changing it must not disturb connections which are already established.
+        /// The subset of <see cref="ServerOptions"/> which is read while the IMAP listener is being
+        /// created, including the certificate options which
+        /// <see cref="CertificateHelper.GetTlsCertificate"/> resolves, so that a certificate
+        /// renewal takes effect. A change to one of these can only take effect by restarting the
+        /// listener. Every other option is read at the point of use, so changing it must not
+        /// disturb connections which are already established.
+        ///
+        /// Unlike SMTP, the listener set is part of this projection rather than being reconciled
+        /// entry by entry: LumiSoft's IMAP_Server owns its whole bindings array and has no
+        /// per binding lifecycle, so adding or removing an IMAP listener restarts all of them.
         ///
         /// Keep this in sync when adding an option which affects the listener.
         /// </summary>
         internal readonly record struct ImapListenerConfig(
-            int? ImapPort,
+            string Listeners,
             string BindAddress,
             bool AllowRemoteConnections,
             bool DisableIPv6,
-            string HostName)
+            string HostName,
+            string TlsCertificate,
+            string TlsCertificatePrivateKey,
+            string TlsCertificateStoreThumbprint,
+            string TlsCertificatePassword)
         {
             public static ImapListenerConfig From(ServerOptions options) => new(
-                options.ImapPort,
+                DescribeListeners(options),
                 options.BindAddress,
                 options.AllowRemoteConnections,
                 options.DisableIPv6,
-                options.HostName);
+                options.HostName,
+                options.TlsCertificate,
+                options.TlsCertificatePrivateKey,
+                options.TlsCertificateStoreThumbprint,
+                options.TlsCertificatePassword);
+
+            /// <summary>
+            /// The listener set as a value comparable string. An array member would compare by
+            /// reference, so every settings write would look like a listener change and restart the
+            /// listener.
+            /// </summary>
+            private static string DescribeListeners(ServerOptions options) =>
+                string.Join(";", options.ResolveImapListeners().Select(listener => $"{listener.Port}:{listener.TlsMode}"));
         }
 
         private void OnServerOptionsChanged(ServerOptions serverOptions)
@@ -86,54 +110,45 @@ namespace Rnwood.Smtp4dev.Server
         {
             this.lastListenerConfig = ImapListenerConfig.From(serverOptions.CurrentValue);
 
-            if (!serverOptions.CurrentValue.ImapPort.HasValue)
+            ServerOptions options = serverOptions.CurrentValue;
+            IReadOnlyList<ImapListenerOptions> listeners = options.ResolveImapListeners();
+
+            if (listeners.Count == 0)
             {
                 log.Information("IMAP server disabled - no port configured");
                 return;
             }
 
+            X509Certificate2 certificate = CertificateHelper.GetTlsCertificate(options, log);
 
             List<IPBindInfo> bindings = new List<IPBindInfo>();
 
             // Check if a specific bind address is configured
             System.Net.IPAddress bindAddress = null;
-            if (!string.IsNullOrWhiteSpace(serverOptions.CurrentValue.BindAddress))
+            if (!string.IsNullOrWhiteSpace(options.BindAddress))
             {
-                if (!System.Net.IPAddress.TryParse(serverOptions.CurrentValue.BindAddress, out bindAddress))
+                if (!System.Net.IPAddress.TryParse(options.BindAddress, out bindAddress))
                 {
-                    log.Error("Invalid IMAP bind address configured: {bindAddress}", serverOptions.CurrentValue.BindAddress);
-                    throw new ArgumentException($"Invalid bind address: {serverOptions.CurrentValue.BindAddress}");
+                    log.Error("Invalid IMAP bind address configured: {bindAddress}", options.BindAddress);
+                    throw new ArgumentException($"Invalid bind address: {options.BindAddress}");
                 }
             }
 
-            if (bindAddress != null)
+            foreach (ImapListenerOptions listener in listeners)
             {
-                // Use the specific bind address when configured
-                bindings.Add(new IPBindInfo(serverOptions.CurrentValue.HostName, BindInfoProtocol.TCP, bindAddress, serverOptions.CurrentValue.ImapPort.Value));
-            }
-            else if (serverOptions.CurrentValue.AllowRemoteConnections)
-            {
-                if (!serverOptions.CurrentValue.DisableIPv6)
-                {
-                    // Add IPv6 binding first, IPv4 fallback will be handled by the LumiSoft TCP_Server error handling
-                    bindings.Add(new IPBindInfo(serverOptions.CurrentValue.HostName, BindInfoProtocol.TCP, System.Net.IPAddress.IPv6Any, serverOptions.CurrentValue.ImapPort.Value));
-                    // Add IPv4 as fallback in case IPv6 fails
-                    bindings.Add(new IPBindInfo(serverOptions.CurrentValue.HostName, BindInfoProtocol.TCP, System.Net.IPAddress.Any, serverOptions.CurrentValue.ImapPort.Value));
-                }
-                else
-                {
-                    bindings.Add(new IPBindInfo(serverOptions.CurrentValue.HostName, BindInfoProtocol.TCP, System.Net.IPAddress.Any, serverOptions.CurrentValue.ImapPort.Value));
+                SslMode sslMode = ToSslMode(listener.TlsMode);
 
-                }
-            }
-            else
-            {
-                bindings.Add(new IPBindInfo(serverOptions.CurrentValue.HostName, BindInfoProtocol.TCP, System.Net.IPAddress.Loopback, serverOptions.CurrentValue.ImapPort.Value));
-
-                if (!serverOptions.CurrentValue.DisableIPv6)
+                if (sslMode != SslMode.None && certificate == null)
                 {
-                    // Add IPv6 loopback first, IPv4 loopback already added above as fallback
-                    bindings.Add(new IPBindInfo(serverOptions.CurrentValue.HostName, BindInfoProtocol.TCP, System.Net.IPAddress.IPv6Loopback, serverOptions.CurrentValue.ImapPort.Value));
+                    //Binding in plaintext where TLS was asked for would hand credentials and
+                    //password reset links to anyone watching, so refuse the listener instead.
+                    throw new InvalidOperationException(
+                        $"IMAP listener on port {listener.Port} asks for TLS mode {listener.TlsMode} but no certificate could be resolved.");
+                }
+
+                foreach (System.Net.IPAddress address in BindAddressesFor(options, bindAddress))
+                {
+                    bindings.Add(new IPBindInfo(options.HostName, BindInfoProtocol.TCP, address, listener.Port, sslMode, certificate));
                 }
             }
 
@@ -214,6 +229,68 @@ namespace Rnwood.Smtp4dev.Server
         {
             imapServer?.Stop();
             imapServer = null;
+        }
+
+        /// <summary>
+        /// The addresses one listener binds to, in the order the previous implementation used them:
+        /// a configured bind address wins, otherwise IPv6 first with IPv4 as the fallback which
+        /// LumiSoft's TCP_Server error handling relies on.
+        /// </summary>
+        private static IEnumerable<System.Net.IPAddress> BindAddressesFor(ServerOptions options, System.Net.IPAddress bindAddress)
+        {
+            if (bindAddress != null)
+            {
+                yield return bindAddress;
+                yield break;
+            }
+
+            if (options.AllowRemoteConnections)
+            {
+                if (!options.DisableIPv6)
+                {
+                    yield return System.Net.IPAddress.IPv6Any;
+                }
+
+                yield return System.Net.IPAddress.Any;
+                yield break;
+            }
+
+            yield return System.Net.IPAddress.Loopback;
+
+            if (!options.DisableIPv6)
+            {
+                yield return System.Net.IPAddress.IPv6Loopback;
+            }
+        }
+
+        private static SslMode ToSslMode(TlsMode tlsMode) => tlsMode switch
+        {
+            TlsMode.ImplicitTls => SslMode.SSL,
+            TlsMode.StartTls => SslMode.TLS,
+            _ => SslMode.None
+        };
+
+        /// <summary>
+        /// The endpoints every running binding is listening on. Ports are resolved, so a listener
+        /// configured on port 0 reports the port the OS gave it.
+        /// </summary>
+        internal IPEndPoint[] ListeningEndpoints
+        {
+            get
+            {
+                try
+                {
+                    return imapServer?.ListeningPoints
+                        .Select(lp => lp.Socket?.LocalEndPoint as IPEndPoint)
+                        .Where(endpoint => endpoint != null)
+                        .ToArray() ?? [];
+                }
+                catch (ObjectDisposedException)
+                {
+                    //The listener is being replaced.
+                    return [];
+                }
+            }
         }
 
         private IMAP_Server imapServer;
