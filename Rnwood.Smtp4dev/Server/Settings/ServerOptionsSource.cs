@@ -38,6 +38,8 @@ namespace Rnwood.Smtp4dev.Server.Settings
         public string HostName { get; set; }
 
         public int? ImapPort { get; set; }
+        public SmtpListenerOptions[] SmtpListeners { get; set; }
+        public ImapListenerOptions[] ImapListeners { get; set; }
         public int? Pop3Port { get; set; }
         public bool? Pop3SecureConnectionRequired { get; set; }
 
