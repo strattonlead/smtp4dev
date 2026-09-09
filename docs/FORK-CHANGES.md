@@ -28,7 +28,7 @@ changes, change the section here in the same commit.
 | FP10 | `blocked_connections` gauge and a metrics endpoint | Landed `v3.3.0-p4` | `ScriptingHost.cs`, `Controllers/MetricsController.cs`, `ApiModel/Metrics.cs` + 1 test file |
 | FP11 | The authenticated user on the scripting session handle | Landed `v3.3.0-p5` | `ApiModel/Session.cs`, `Smtp4devServer.cs` + 1 test file |
 | FP12 | A credentials expression may have no opinion | Landed `v3.3.0-p6` | `ScriptingHost.cs` + 1 test file |
-| FP13 | Runtime settings are written where they are read from | Landed | `Service/HostingEnvironmentHelper.cs` + 1 test file |
+| FP13 | Runtime settings are written where they are read from | Landed `v3.3.0-p7` | `Service/HostingEnvironmentHelper.cs` + 1 test file |
 
 ## Versioning
 
@@ -459,7 +459,7 @@ is lost, and its failure mode is the server accepting anything.
 
 ## FP13 - Runtime settings are written where they are read from
 
-**Status:** landed with this change.
+**Status:** landed, released as `v3.3.0-p7`.
 
 ### Why
 
