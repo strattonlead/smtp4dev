@@ -23,14 +23,14 @@ changes, change the section here in the same commit.
 | FP5 | GHCR container image | Landed `v3.3.0-p2` | `.github/workflows/build.yml`, `Dockerfile.linux` |
 | FP6 | Nightly workflow for excluded tests | Landed `v3.3.0-p2` | `.github/workflows/nightly.yml` |
 | FP7 | Remove the upstream CLA workflow | Landed `v3.3.0-p2` | `.github/workflows/cla.yml` (deleted) |
-| FP8 | Message provenance: mailbox and session on the API model | Landed | `ApiModel/Message.cs`, `Data/MessagesRepository.cs` + 1 test file |
+| FP8 | Message provenance: mailbox and session on the API model | Landed `v3.3.0-p3` | `ApiModel/Message.cs`, `Data/MessagesRepository.cs` + 1 test file |
 
 ## Versioning
 
 Release tags are `v<upstream-version>-p<patchlevel>`. The upstream version identifies the
 smtp4dev release the patch branch sits on; the patch level increments whenever our diff changes
-against that same upstream version. Current: `v3.3.0-p2`, published as release binaries for six
-runtimes and as `ghcr.io/strattonlead/smtp4dev:3.3.0-p2` for `linux/amd64` and `linux/arm64`.
+against that same upstream version. Current: `v3.3.0-p3`, published as release binaries for six
+runtimes and as `ghcr.io/strattonlead/smtp4dev:3.3.0-p3` for `linux/amd64` and `linux/arm64`.
 
 Consumers pin an exact tag. There is no `latest` and no `main` tag, because a moving engine tag
 makes a Deadletter deployment irreproducible.
@@ -279,7 +279,7 @@ the CLA on the upstream pull request, which is where the bot actually runs.
 
 ## FP8 - Message provenance
 
-**Status:** landed with this change.
+**Status:** landed in `v3.3.0-p3`.
 
 ### Why
 
