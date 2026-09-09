@@ -266,3 +266,7 @@ out/
 
 # Build output from .github/workflows/build.yml
 dist/
+
+# Local end to end run artifacts
+e2e-out/
+e2e-run/

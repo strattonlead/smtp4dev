@@ -280,6 +280,22 @@ public class ScriptingHost
         {
             JsValue result = jsEngine.Evaluate(credValidationScript);
 
+            // null or undefined means the expression has no opinion about these credentials, so
+            // the normal user and password check decides.
+            //
+            // Without this the hook is all or nothing: any expression at all replaces password
+            // validation for the whole server, so an expression which rejects one account has to
+            // return true for everyone else - and true here means "authenticated", not "carry on
+            // checking". An expression written to fail one login would silently accept every
+            // other login with any password.
+            if (result.IsNull() || result.IsUndefined())
+            {
+                log.Information("CredentialValidationExpression: (credentials: {credentials}, session: {session.Id}) => no opinion", credentials,
+                    session.Id);
+
+                return null;
+            }
+
             bool success = result.AsBoolean();
 
             log.Information("CredentialValidationExpression: (credentials: {credentials}, session: {session.Id}) => {result} => {success}", credentials,
