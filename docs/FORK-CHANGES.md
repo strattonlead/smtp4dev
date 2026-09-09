@@ -141,6 +141,12 @@ mode left it because they identify an individual listener.
 certificate options and the listener set. IMAP restarts wholesale on any listener change, because
 LumiSoft's `IMAP_Server` owns its bindings array and has no per binding lifecycle.
 
+Only a listener which asked for TLS is given the certificate. `IMAP_Session` advertises
+`STARTTLS` whenever its certificate is non null, independently of the binding's `SslMode`, so
+passing the certificate to every binding would make a plaintext listener offer an upgrade its
+configuration never asked for - and a client connecting with `SecureSocketOptions.Auto` takes it.
+`ImapServerPlaintextTests` pins this down.
+
 A listener which asks for TLS with no resolvable certificate now throws rather than binding in
 plaintext.
 
