@@ -24,6 +24,8 @@ changes, change the section here in the same commit.
 | FP6 | Nightly workflow for excluded tests | Landed `v3.3.0-p2` | `.github/workflows/nightly.yml` |
 | FP7 | Remove the upstream CLA workflow | Landed `v3.3.0-p2` | `.github/workflows/cla.yml` (deleted) |
 | FP8 | Message provenance: mailbox and session on the API model | Landed `v3.3.0-p3` | `ApiModel/Message.cs`, `Data/MessagesRepository.cs` + 1 test file |
+| FP9 | Reject a settings write whose expressions do not parse | Landed | `Controllers/ServerController.cs` + 1 test file |
+| FP10 | `blocked_connections` gauge and a metrics endpoint | Landed | `ScriptingHost.cs`, `Controllers/MetricsController.cs`, `ApiModel/Metrics.cs` + 1 test file |
 
 ## Versioning
 
@@ -311,3 +313,54 @@ caller which needs provenance is asking for one message.
 The include lives in `GetAllMessages` rather than at the call site, so an upstream refactor which
 routes message reads through a different query will drop it silently. `MessageProvenanceTests`
 asserts both fields end to end through the repository, so it catches that.
+
+## FP9 - Reject a settings write whose expressions do not parse
+
+**Status:** landed with this change.
+
+### Why
+
+A settings write carrying unparseable JavaScript used to succeed. `ScriptingHost.ParseScript` then
+failed silently: it logged, set the script to null, and the hook was disabled from that moment on.
+The caller got a 200 and no indication that its rules had stopped applying.
+
+Because the validation expressions are a single global value per hook, that did not disable the
+hook only for the client which made the bad write - it disabled it for **every** client of the
+server. A multi tenant front end therefore had no safe way to install a rule: a rendering bug in
+one tenant's rule silently turned off fault injection for all of them.
+
+The obvious alternative is a validate-then-write endpoint, but that leaves a window between the
+check and the write. Refusing the write itself has no window.
+
+### What changed
+
+`ServerController.UpdateServer` parses all four validation expressions before writing anything, and
+returns 400 naming the offending property and the parser's message. It uses the same
+`Esprima.JavaScriptParser` `ScriptingHost` uses, in the same process, so an expression which passes
+this check cannot fail there.
+
+### Rebase notes
+
+`ExpressionValidationTests.EveryValidationExpressionOnTheApiModelIsChecked` fails if a fifth
+expression is added to the API model without being validated, which is exactly how the silent
+failure would come back.
+
+## FP10 - Blocked connection gauge
+
+**Status:** landed with this change.
+
+### Why
+
+`delay()` parks the connection's thread. Expression evaluation latency cannot detect that, because
+for a blocking rule the block *is* the latency - the metric which would warn you is the one the
+fault makes look normal. And since expressions are global, one client's `timeout` rule parks
+threads belonging to every client, so the interesting number is server wide.
+
+### What changed
+
+`ScriptingHost` counts connections currently inside `delay()` and exposes
+`ScriptingHost.BlockedConnections`. A new `GET /api/metrics` returns it.
+
+The metric lives in its own `ApiModel.Metrics`, not on `ApiModel.Server`: that object is settings,
+which callers read, edit and post back, and a number which changes on its own does not belong in
+something round tripped.

@@ -144,6 +144,33 @@ public class ScriptingHost
     /// </remarks>
     private bool Delay(double seconds, IConnection connection)
     {
+        Interlocked.Increment(ref blockedConnections);
+
+        try
+        {
+            return DelayCore(seconds, connection);
+        }
+        finally
+        {
+            Interlocked.Decrement(ref blockedConnections);
+        }
+    }
+
+    private static int blockedConnections;
+
+    /// <summary>
+    /// How many connections are currently parked inside <c>delay()</c>.
+    ///
+    /// This cannot be inferred from expression evaluation latency, because for a blocking rule the
+    /// block <em>is</em> the latency - the metric that would warn you is the one the fault makes
+    /// look normal. Since the expressions are global, one client's timeout rule parks threads
+    /// belonging to every client, so this is the number that says how close the whole server is to
+    /// thread exhaustion.
+    /// </summary>
+    public static int BlockedConnections => Volatile.Read(ref blockedConnections);
+
+    private bool DelayCore(double seconds, IConnection connection)
+    {
         bool indefinite = seconds == -1;
         DateTime deadline = indefinite ? DateTime.MaxValue : DateTime.UtcNow.AddSeconds(seconds);
 
