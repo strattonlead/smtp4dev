@@ -23,6 +23,7 @@ changes, change the section here in the same commit.
 | FP5 | GHCR container image | Landed `v3.3.0-p2` | `.github/workflows/build.yml`, `Dockerfile.linux` |
 | FP6 | Nightly workflow for excluded tests | Landed `v3.3.0-p2` | `.github/workflows/nightly.yml` |
 | FP7 | Remove the upstream CLA workflow | Landed `v3.3.0-p2` | `.github/workflows/cla.yml` (deleted) |
+| FP8 | Message provenance: mailbox and session on the API model | Landed | `ApiModel/Message.cs`, `Data/MessagesRepository.cs` + 1 test file |
 
 ## Versioning
 
@@ -275,3 +276,38 @@ appears in.
 
 The workflow file is deleted. If this fork ever does contribute upstream, the contributor signs
 the CLA on the upstream pull request, which is where the bot actually runs.
+
+## FP8 - Message provenance
+
+**Status:** landed with this change.
+
+### Why
+
+`GET /api/messages/{id}` projected neither the mailbox a message was delivered to nor the SMTP
+session it arrived on, although `DbModel.Message` has a navigation property for both.
+
+Two consequences, both of which matter to anything serving more than one tenant:
+
+- **A message id proves nothing about ownership.** The engine resolves an id across every mailbox,
+  so a front end holding one had no way to tell whose mailbox it landed in except by listing every
+  mailbox that caller owns and looking for the id. That is correct but O(all their mail) per read.
+- **A transcript could not be reached from a message.** The session log endpoint takes a session
+  id, and nothing in the message response carried one, so there was no path from "this message
+  looks wrong" to "here is the SMTP conversation that produced it". That is the whole point of
+  keeping transcripts.
+
+### What changed
+
+`ApiModel.Message` gains `MailboxName` and `SessionId`, projected from relations which already
+existed. `MessagesRepository.GetAllMessages` includes both, which is what `TryGetMessageById`
+reads through - the mailbox was already included on two other paths but not on the one the API
+actually uses.
+
+`MessageSummary` is deliberately unchanged: the list projection is deliberately narrow, and a
+caller which needs provenance is asking for one message.
+
+### Rebase notes
+
+The include lives in `GetAllMessages` rather than at the call site, so an upstream refactor which
+routes message reads through a different query will drop it silently. `MessageProvenanceTests`
+asserts both fields end to end through the repository, so it catches that.
