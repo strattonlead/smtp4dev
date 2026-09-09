@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Options;
+﻿using Microsoft.Extensions.Options;
 using Rnwood.Smtp4dev.DbModel;
 using Rnwood.Smtp4dev.Hubs;
 using Rnwood.SmtpServer;
@@ -74,21 +74,22 @@ namespace Rnwood.Smtp4dev.Server
         }
 
         /// <summary>
-        /// The subset of <see cref="Settings.ServerOptions"/> which is read while the SMTP listener is being
-        /// created - either directly by <see cref="CreateSmtpServer"/> or indirectly by
-        /// <see cref="CertificateHelper.GetTlsCertificate"/>. A change to one of these can only take effect by
-        /// restarting the listener. Every other option is read at the point of use, so changing it must not
-        /// disturb connections which are already established.
+        /// The subset of <see cref="Settings.ServerOptions"/> which every SMTP listener shares and
+        /// reads while it is being created - either directly by <see cref="StartListener"/> or
+        /// indirectly by <see cref="CertificateHelper.GetTlsCertificate"/>. A change to one of
+        /// these can only take effect by recreating every listener.
+        ///
+        /// The port and TLS mode are deliberately not here. They belong to an individual listener,
+        /// and <see cref="ApplySmtpListenerChanges"/> reconciles the listener set entry by entry so
+        /// that adding or removing one leaves the sessions on the others alone.
         ///
         /// Keep this in sync when adding an option which affects the listener.
         /// </summary>
         internal readonly record struct SmtpListenerConfig(
-            int Port,
             string BindAddress,
             bool AllowRemoteConnections,
             bool DisableIPv6,
             string HostName,
-            TlsMode TlsMode,
             string SslProtocols,
             string TlsCipherSuites,
             long? MaxMessageSize,
@@ -101,12 +102,10 @@ namespace Rnwood.Smtp4dev.Server
             string TlsCertificatePassword)
         {
             public static SmtpListenerConfig From(Settings.ServerOptions options) => new(
-                options.Port,
                 options.BindAddress,
                 options.AllowRemoteConnections,
                 options.DisableIPv6,
                 options.HostName,
-                options.TlsMode,
                 options.SslProtocols,
                 options.TlsCipherSuites,
                 options.MaxMessageSize,
@@ -118,6 +117,12 @@ namespace Rnwood.Smtp4dev.Server
                 options.TlsCertificateStoreThumbprint,
                 options.TlsCertificatePassword);
         }
+
+        /// <summary>
+        /// A listener which is currently running, paired with the configuration it was started
+        /// from so that the set can be reconciled against a new configuration.
+        /// </summary>
+        private sealed record RunningListener(SmtpListenerOptions Config, Rnwood.SmtpServer.SmtpServer Server);
 
         private void OnServerOptionsChanged(Settings.ServerOptions arg1)
         {
@@ -131,7 +136,7 @@ namespace Rnwood.Smtp4dev.Server
 
             if (SmtpListenerConfig.From(arg1) != this.lastListenerConfig)
             {
-                if (this.smtpServer?.IsRunning == true)
+                if (this.smtpServers.Count > 0)
                 {
                     log.Information("SMTP listener configuration changed. Restarting server...");
                     Stop();
@@ -145,7 +150,16 @@ namespace Rnwood.Smtp4dev.Server
                 return;
             }
 
-            log.Debug("ServerOptions changed but no SMTP listener settings were affected. Not restarting the server.");
+            if (!arg1.ResolveSmtpListeners().SequenceEqual(this.lastResolvedListeners))
+            {
+                log.Information("SMTP listener set changed. Starting and stopping only the listeners which changed.");
+                this.lastResolvedListeners = arg1.ResolveSmtpListeners().ToArray();
+                ApplySmtpListenerChanges(arg1);
+            }
+            else
+            {
+                log.Debug("ServerOptions changed but no SMTP listener settings were affected. Not restarting the server.");
+            }
 
             if (MailboxOrRetentionOptionsChanged(previousOptions, arg1))
             {
@@ -170,11 +184,58 @@ namespace Rnwood.Smtp4dev.Server
                    || newOptions.NumberOfSessionsToKeep != previousOptions.NumberOfSessionsToKeep;
         }
 
-        private void CreateSmtpServer()
+        /// <summary>
+        /// Brings the running listener set in line with the configured one: listeners whose
+        /// configuration is unchanged are left running with their sessions intact, listeners which
+        /// are gone are stopped, and listeners which are new are started.
+        /// </summary>
+        private void ApplySmtpListenerChanges(Settings.ServerOptions options)
         {
-            X509Certificate2 cert = CertificateHelper.GetTlsCertificate(serverOptions.CurrentValue, log);
+            List<SmtpListenerOptions> desired = options.ResolveSmtpListeners().ToList();
+            List<RunningListener> retained = new();
 
-            Settings.ServerOptions serverOptionsValue = serverOptions.CurrentValue;
+            foreach (RunningListener running in this.smtpServers)
+            {
+                int match = desired.IndexOf(running.Config);
+
+                if (match >= 0 && running.Server.IsRunning)
+                {
+                    desired.RemoveAt(match);
+                    retained.Add(running);
+                }
+                else
+                {
+                    log.Information("Stopping SMTP listener for port {port} with TLS mode {tlsMode}.",
+                        running.Config.Port, running.Config.TlsMode);
+                    running.Server.Stop(true);
+                }
+            }
+
+            this.smtpServers = retained;
+
+            if (desired.Count == 0)
+            {
+                return;
+            }
+
+            X509Certificate2 cert = CertificateHelper.GetTlsCertificate(options, log);
+
+            foreach (SmtpListenerOptions listener in desired)
+            {
+                StartListener(options, listener, cert);
+            }
+        }
+
+        private void StartListener(Settings.ServerOptions serverOptionsValue, SmtpListenerOptions listener, X509Certificate2 cert)
+        {
+            if (listener.TlsMode != TlsMode.None && cert == null)
+            {
+                //Binding in plaintext where TLS was asked for would hand credentials to anyone
+                //watching, so refuse the listener instead.
+                throw new InvalidOperationException(
+                    $"SMTP listener on port {listener.Port} asks for TLS mode {listener.TlsMode} but no certificate could be resolved.");
+            }
+
             IPAddress bindAddress = null;
             if (!string.IsNullOrWhiteSpace(serverOptionsValue.BindAddress))
             {
@@ -188,14 +249,14 @@ namespace Rnwood.Smtp4dev.Server
                 .WithAllowRemoteConnections(serverOptionsValue.AllowRemoteConnections)
                 .WithEnableIpV6(!serverOptionsValue.DisableIPv6)
                 .WithDomainName(serverOptionsValue.HostName)
-                .WithPort(serverOptionsValue.Port)
+                .WithPort(listener.Port)
                 .WithRequireAuthentication(serverOptionsValue.AuthenticationRequired)
                 .WithNonSecureAuthMechanisms(serverOptionsValue.SmtpEnabledAuthTypesWhenNotSecureConnection.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
                 .WithSecureAuthMechanisms(serverOptionsValue.SmtpEnabledAuthTypesWhenSecureConnection.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
-                .WithImplicitTlsCertificate(serverOptionsValue.TlsMode == TlsMode.ImplicitTls ? cert : null)
-                .WithStartTlsCertificate(serverOptionsValue.TlsMode == TlsMode.StartTls ? cert : null)
-                .WithSslProtocols(!string.IsNullOrWhiteSpace(serverOptionsValue.SslProtocols) 
-                    ? serverOptionsValue.SslProtocols.Split(",", StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries).Select(s => Enum.Parse<SslProtocols>(s, true)).Aggregate((current, protocol) => current | protocol) 
+                .WithImplicitTlsCertificate(listener.TlsMode == TlsMode.ImplicitTls ? cert : null)
+                .WithStartTlsCertificate(listener.TlsMode == TlsMode.StartTls ? cert : null)
+                .WithSslProtocols(!string.IsNullOrWhiteSpace(serverOptionsValue.SslProtocols)
+                    ? serverOptionsValue.SslProtocols.Split(",", StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries).Select(s => Enum.Parse<SslProtocols>(s, true)).Aggregate((current, protocol) => current | protocol)
                     : SslProtocols.None)
                 .WithMaxMessageSize(serverOptionsValue.MaxMessageSize);
 
@@ -212,17 +273,26 @@ namespace Rnwood.Smtp4dev.Server
                 builder.WithTlsCipherSuites(cipherSuites);
             }
 
-            this.smtpServer = new Rnwood.SmtpServer.SmtpServer(builder.Build());
-            this.smtpServer.MessageCompletedEventHandler += OnMessageCompleted;
-            this.smtpServer.MessageReceivedEventHandler += OnMessageReceived;
-            this.smtpServer.SessionCompletedEventHandler += OnSessionCompleted;
-            this.smtpServer.SessionStartedHandler += OnSessionStarted;
-            this.smtpServer.AuthenticationCredentialsValidationRequiredEventHandler += OnAuthenticationCredentialsValidationRequired;
-            this.smtpServer.IsRunningChanged += OnIsRunningChanged;
-            ((SmtpServer.ServerOptions)this.smtpServer.Options).MessageStartEventHandler += OnMessageStart;
+            var smtpServer = new Rnwood.SmtpServer.SmtpServer(builder.Build());
+            smtpServer.MessageCompletedEventHandler += OnMessageCompleted;
+            smtpServer.MessageReceivedEventHandler += OnMessageReceived;
+            smtpServer.SessionCompletedEventHandler += OnSessionCompleted;
+            smtpServer.SessionStartedHandler += OnSessionStarted;
+            smtpServer.AuthenticationCredentialsValidationRequiredEventHandler += OnAuthenticationCredentialsValidationRequired;
+            smtpServer.IsRunningChanged += OnIsRunningChanged;
+            ((SmtpServer.ServerOptions)smtpServer.Options).MessageStartEventHandler += OnMessageStart;
+            ((SmtpServer.ServerOptions)smtpServer.Options).MessageRecipientAddingEventHandler += OnMessageRecipientAddingEventHandler;
+            ((SmtpServer.ServerOptions)smtpServer.Options).CommandReceivedEventHandler += OnCommandReceived;
 
-            ((SmtpServer.ServerOptions)this.smtpServer.Options).MessageRecipientAddingEventHandler += OnMessageRecipientAddingEventHandler;
-            ((SmtpServer.ServerOptions)this.smtpServer.Options).CommandReceivedEventHandler += OnCommandReceived;
+            smtpServer.Start();
+
+            this.smtpServers.Add(new RunningListener(listener, smtpServer));
+
+            foreach (var endpoint in smtpServer.ListeningEndpoints)
+            {
+                log.Information("SMTP Server is listening on port {smtpPortNumber} ({address}) with TLS mode ({tlsMode}).",
+                    endpoint.Port, endpoint.Address, listener.TlsMode);
+            }
         }
 
         private Task OnCommandReceived(object sender, CommandEventArgs e)
@@ -281,7 +351,7 @@ namespace Rnwood.Smtp4dev.Server
 
         private void OnIsRunningChanged(object sender, EventArgs e)
         {
-            if (this.smtpServer.IsRunning) return;
+            if (this.IsRunning) return;
             log.Information("SMTP server stopped.");
             this.notificationsHub.onServerChanged().Wait();
         }
@@ -315,7 +385,13 @@ namespace Rnwood.Smtp4dev.Server
         public void Stop()
         {
             log.Information("SMTP server stopping...");
-            this.smtpServer?.Stop(true);
+
+            foreach (RunningListener listener in this.smtpServers)
+            {
+                listener.Server.Stop(true);
+            }
+
+            this.smtpServers.Clear();
         }
 
 
@@ -986,7 +1062,8 @@ namespace Rnwood.Smtp4dev.Server
 
 
         private readonly ITaskQueue taskQueue;
-        private Rnwood.SmtpServer.SmtpServer smtpServer;
+        private List<RunningListener> smtpServers = new();
+        private SmtpListenerOptions[] lastResolvedListeners = Array.Empty<SmtpListenerOptions>();
         private readonly Func<RelayOptions, SmtpClient> relaySmtpClientFactory;
         private readonly NotificationsHub notificationsHub;
         private readonly IServiceScopeFactory serviceScopeFactory;
@@ -998,9 +1075,9 @@ namespace Rnwood.Smtp4dev.Server
 
         public Exception Exception { get; private set; }
 
-        public bool IsRunning => this.smtpServer?.IsRunning ?? false;
+        public bool IsRunning => this.smtpServers.Count > 0 && this.smtpServers.All(listener => listener.Server.IsRunning);
 
-        public IPEndPoint[] ListeningEndpoints => this.smtpServer?.ListeningEndpoints ?? [];
+        public IPEndPoint[] ListeningEndpoints => this.smtpServers.SelectMany(listener => listener.Server.ListeningEndpoints).ToArray();
 
         public void TryStart()
         {
@@ -1010,24 +1087,19 @@ namespace Rnwood.Smtp4dev.Server
                 this.lastStartOptions = this.serverOptions.CurrentValue with { };
                 this.lastAppliedOptions = this.lastStartOptions;
                 this.lastListenerConfig = SmtpListenerConfig.From(this.lastStartOptions);
+                this.lastResolvedListeners = this.lastStartOptions.ResolveSmtpListeners().ToArray();
 
                 DoCleanup();
-                CreateSmtpServer();
-                smtpServer.Start();
-
-                foreach (var l in smtpServer.ListeningEndpoints)
-                {
-                    log.Information("SMTP Server is listening on port {smtpPortNumber} ({address}) with TLS mode ({tlsMode}).",
-                        l.Port, l.Address, this.lastStartOptions.TlsMode);
-                }
+                ApplySmtpListenerChanges(this.lastStartOptions);
 
                 log.Information("Keeping last {messagesToKeep} messages per mailbox and {sessionsToKeep} sessions.",
                     serverOptions.CurrentValue.NumberOfMessagesToKeep, serverOptions.CurrentValue.NumberOfSessionsToKeep);
             }
             catch (Exception e)
             {
-                log.Fatal(e, "SMTP server failed to start. TlsMode: {tlsMode}, Port: {port}, AllowRemoteConnections: {allowRemote}, Exception: {exceptionType}", 
-                    this.lastStartOptions?.TlsMode, this.lastStartOptions?.Port, this.lastStartOptions?.AllowRemoteConnections, e.GetType().Name);
+                log.Fatal(e, "SMTP server failed to start. Listeners: {listeners}, AllowRemoteConnections: {allowRemote}, Exception: {exceptionType}",
+                    string.Join(", ", this.lastResolvedListeners.Select(l => $"{l.Port}/{l.TlsMode}")),
+                    this.lastStartOptions?.AllowRemoteConnections, e.GetType().Name);
                 this.Exception = e;
             }
             finally
