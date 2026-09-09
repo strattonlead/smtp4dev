@@ -18,17 +18,18 @@ changes, change the section here in the same commit.
 |---|---|---|---|
 | FP1 | Selective listener restart | Landed `5d52cdfe` | `Smtp4devServer.cs`, `ImapServer.cs`, `ServerOptions.cs`, 3 test files |
 | FP2 | CI: build, test and publish binaries | Landed `be7b50fe` | `.github/workflows/build.yml` |
-| FP3 | Multi-listener SMTP and IMAP TLS | Landed | `ServerOptions.cs`, `SmtpListenerOptions.cs`, `ImapListenerOptions.cs`, `ServerOptionsSource.cs`, `CertificateHelper.cs`, `Smtp4devServer.cs`, `ImapServer.cs` + 3 test files |
-| FP4 | Cancellable `delay()` | Landed | `ScriptingHost.cs`, `IConnection.cs`, `Connection.cs`, `IConnectionChannel.cs`, `TcpClientConnectionChannel.cs`, `TestMocks.cs` + 1 test file |
-| FP5 | GHCR container image | Landed | `.github/workflows/build.yml`, `Dockerfile.linux` |
-| FP6 | Nightly workflow for excluded tests | Landed | `.github/workflows/nightly.yml` |
-| FP7 | Remove the upstream CLA workflow | Landed | `.github/workflows/cla.yml` (deleted) |
+| FP3 | Multi-listener SMTP and IMAP TLS | Landed `v3.3.0-p2` | `ServerOptions.cs`, `SmtpListenerOptions.cs`, `ImapListenerOptions.cs`, `ServerOptionsSource.cs`, `CertificateHelper.cs`, `Smtp4devServer.cs`, `ImapServer.cs` + 5 test files |
+| FP4 | Cancellable `delay()` | Landed `v3.3.0-p2` | `ScriptingHost.cs`, `IConnection.cs`, `Connection.cs`, `IConnectionChannel.cs`, `TcpClientConnectionChannel.cs`, `TestMocks.cs` + 1 test file |
+| FP5 | GHCR container image | Landed `v3.3.0-p2` | `.github/workflows/build.yml`, `Dockerfile.linux` |
+| FP6 | Nightly workflow for excluded tests | Landed `v3.3.0-p2` | `.github/workflows/nightly.yml` |
+| FP7 | Remove the upstream CLA workflow | Landed `v3.3.0-p2` | `.github/workflows/cla.yml` (deleted) |
 
 ## Versioning
 
 Release tags are `v<upstream-version>-p<patchlevel>`. The upstream version identifies the
 smtp4dev release the patch branch sits on; the patch level increments whenever our diff changes
-against that same upstream version. Current: `v3.3.0-p1`.
+against that same upstream version. Current: `v3.3.0-p2`, published as release binaries for six
+runtimes and as `ghcr.io/strattonlead/smtp4dev:3.3.0-p2` for `linux/amd64` and `linux/arm64`.
 
 Consumers pin an exact tag. There is no `latest` and no `main` tag, because a moving engine tag
 makes a Deadletter deployment irreproducible.
@@ -105,7 +106,7 @@ Any host without an IPv6 stack needs the same flag.
 
 ## FP3 - Multi-listener SMTP and IMAP TLS
 
-**Status:** landed with this change.
+**Status:** landed in `v3.3.0-p2`.
 
 ### Why
 
@@ -151,6 +152,15 @@ configuration never asked for - and a client connecting with `SecureSocketOption
 A listener which asks for TLS with no resolvable certificate now throws rather than binding in
 plaintext.
 
+### Test set
+
+`ServerOptionsListenerTests` covers the resolvers and the certificate gate,
+`Smtp4devServerListenerTests` the SMTP listener lifecycle and both TLS handshakes,
+`ImapServerTlsTests` implicit TLS and STARTTLS on IMAP, `ImapServerPlaintextTests` that a
+plaintext listener still offers neither, `ListenerConfigTests` the option classification, and
+`SettingsFileListenerRoundTripTests` that the listener collections survive the settings file
+round trip which every API write performs.
+
 ### Known limitation
 
 `SecureConnectionRequired` remains a single server wide option rather than a per listener one. It
@@ -168,7 +178,7 @@ check that stops a listener relevant option from silently never taking effect.
 
 ## FP4 - Cancellable `delay()`
 
-**Status:** landed with this change.
+**Status:** landed in `v3.3.0-p2`.
 
 ### Why
 
@@ -202,7 +212,7 @@ than only the elapsed time.
 
 ## FP5 - GHCR container image
 
-**Status:** landed with this change.
+**Status:** landed in `v3.3.0-p2`.
 
 ### Why
 
@@ -221,7 +231,7 @@ and ref are recorded as image labels.
 
 ## FP6 - Nightly workflow for the tests the gate excludes
 
-**Status:** landed with this change.
+**Status:** landed in `v3.3.0-p2`.
 
 ### Why
 
@@ -244,7 +254,7 @@ patch tag is published.
 
 ## FP7 - Remove the upstream CLA workflow
 
-**Status:** landed with this change.
+**Status:** landed in `v3.3.0-p2`.
 
 ### Why
 
