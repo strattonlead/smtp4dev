@@ -26,6 +26,7 @@ changes, change the section here in the same commit.
 | FP8 | Message provenance: mailbox and session on the API model | Landed `v3.3.0-p3` | `ApiModel/Message.cs`, `Data/MessagesRepository.cs` + 1 test file |
 | FP9 | Reject a settings write whose expressions do not parse | Landed `v3.3.0-p4` | `Controllers/ServerController.cs` + 1 test file |
 | FP10 | `blocked_connections` gauge and a metrics endpoint | Landed `v3.3.0-p4` | `ScriptingHost.cs`, `Controllers/MetricsController.cs`, `ApiModel/Metrics.cs` + 1 test file |
+| FP11 | The authenticated user on the scripting session handle | Landed | `ApiModel/Session.cs`, `Smtp4devServer.cs` + 1 test file |
 
 ## Versioning
 
@@ -364,3 +365,43 @@ threads belonging to every client, so the interesting number is server wide.
 The metric lives in its own `ApiModel.Metrics`, not on `ApiModel.Server`: that object is settings,
 which callers read, edit and post back, and a number which changes on its own does not belong in
 something round tripped.
+
+## FP11 - The authenticated user on the scripting session handle
+
+**Status:** landed with this change.
+
+### Why
+
+Validation expressions are a single global value per hook, so an expression written for one
+account is evaluated on every account's connections. The only thing that can keep them apart is a
+handle saying whose connection is being looked at.
+
+At AUTH that handle is `credentials.Username`, and at RCPT it is `recipient`. At every other hook
+there was nothing: the `session` object handed to an expression is built from the **stored**
+session, and `DbModel.Session` never recorded who authenticated. `ISession` on the live connection
+has had `Authenticated` and `AuthenticationCredentials` all along; the information was simply
+dropped on the way to the expression.
+
+The practical consequence is that a rule like "make MAIL FROM fail for this one account" could not
+be written at all. Any attempt hit every account on the server, which for a multi tenant front end
+is not a limitation but a data leak with side effects.
+
+### What changed
+
+`ApiModel.Session` gains `AuthenticatedUser`, and `Smtp4devServer` fills it from the live
+connection at each point it builds a session for the scripting host. It is deliberately not
+persisted: it belongs to the connection, not to the stored record, and writing it to the database
+would mean a schema migration for something already in memory.
+
+Before AUTH the value is null, which is the honest answer - an expression scoped to an account
+must not match a connection which has not yet proved it owns that account. Expressions should
+therefore compare it with `===` against a specific username and let null fall through to "no rule
+applies".
+
+### Rebase notes
+
+`ScriptingSessionScopeTests` drives a real SMTP conversation for two accounts and asserts that a
+rule naming one of them rejects only that one. If an upstream refactor rebuilds the session handle
+somewhere new and forgets to attach the user, that test fails rather than the scoping silently
+widening to everybody - which is the failure mode that matters, and the one that would otherwise
+look like the rule simply working.

@@ -27,6 +27,16 @@ namespace Rnwood.Smtp4dev.ApiModel
 
         public string ClientAddress { get; private set; }
         public string ClientName { get; private set; }
+
+        /// <summary>
+        /// The username this connection authenticated as, or null if it has not authenticated yet.
+        ///
+        /// This is not persisted with the session; it is attached from the live connection at the
+        /// point a validation expression is evaluated. Without it a scripting expression has no
+        /// way to tell which account a connection belongs to at any hook other than AUTH and RCPT,
+        /// which means a rule written for one account would fire on everyone's connections.
+        /// </summary>
+        public string AuthenticatedUser { get; set; }
         public string ErrorType { get; private set; }
         public DateTime StartDate { get; }
         public string Error { get; private set; }
