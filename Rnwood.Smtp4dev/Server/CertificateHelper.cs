@@ -77,8 +77,10 @@ namespace Rnwood.Smtp4dev.Server
                 logger.Information("TLS cipher suites: {TlsCipherSuites}", options.TlsCipherSuites);
             }
 
-            // Consider both global TlsMode and POP3-specific Pop3TlsMode when deciding whether a certificate is required
-            if (options.TlsMode != TlsMode.None || (options.Pop3TlsMode != TlsMode.None))
+            // Any listener asking for TLS needs a certificate, not just the scalar TlsMode: a
+            // configuration which leaves TlsMode at None and puts implicit TLS on an SmtpListeners
+            // or ImapListeners entry would otherwise get a null certificate and bind in plaintext.
+            if (options.RequiresTlsCertificate())
             {
                 if (!string.IsNullOrEmpty(options.TlsCertificateStoreThumbprint))
                 {

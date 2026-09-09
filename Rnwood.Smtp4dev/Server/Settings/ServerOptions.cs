@@ -1,7 +1,9 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics.CodeAnalysis;
 using System.Dynamic;
+using System.Linq;
 using System.Net;
 using System.Net.Security;
 using System.Security.Authentication;
@@ -57,6 +59,19 @@ namespace Rnwood.Smtp4dev.Server.Settings
 
         public int? ImapPort { get; set; } = 143;
         public int? Pop3Port { get; set; } = 110;
+
+        /// <summary>
+        /// The SMTP listeners to start. When this is not set, a single listener is derived from
+        /// <see cref="Port"/> and <see cref="TlsMode"/>, so an unmodified upstream configuration
+        /// behaves exactly as it did before this option existed.
+        /// </summary>
+        public SmtpListenerOptions[] SmtpListeners { get; set; } = null;
+
+        /// <summary>
+        /// The IMAP listeners to start. When this is not set, a single listener is derived from
+        /// <see cref="ImapPort"/> with TLS disabled, which is what IMAP has always done.
+        /// </summary>
+        public ImapListenerOptions[] ImapListeners { get; set; } = null;
 
         public bool RecreateDb { get; set; }
 
@@ -130,6 +145,41 @@ namespace Rnwood.Smtp4dev.Server.Settings
         /// If not specified, issuer validation is performed using the authority's discovery document.
         /// </summary>
         public string OAuth2Issuer { get; set; }
+
+        /// <summary>
+        /// The SMTP listeners which should be running, whether they came from
+        /// <see cref="SmtpListeners"/> or from the single port and TLS mode which preceded it.
+        /// </summary>
+        public IReadOnlyList<SmtpListenerOptions> ResolveSmtpListeners() =>
+            SmtpListeners is { Length: > 0 }
+                ? SmtpListeners
+                : new[] { new SmtpListenerOptions { Port = Port, TlsMode = TlsMode } };
+
+        /// <summary>
+        /// The IMAP listeners which should be running. Empty when IMAP is disabled.
+        /// </summary>
+        public IReadOnlyList<ImapListenerOptions> ResolveImapListeners()
+        {
+            if (ImapListeners is { Length: > 0 })
+            {
+                return ImapListeners;
+            }
+
+            return ImapPort.HasValue
+                ? new[] { new ImapListenerOptions { Port = ImapPort.Value, TlsMode = TlsMode.None } }
+                : Array.Empty<ImapListenerOptions>();
+        }
+
+        /// <summary>
+        /// Whether any listener needs a TLS certificate. Asked by
+        /// <see cref="CertificateHelper.GetTlsCertificate"/>, which must not skip resolving a
+        /// certificate just because the scalar <see cref="TlsMode"/> is None while a listener
+        /// entry asks for TLS.
+        /// </summary>
+        public bool RequiresTlsCertificate() =>
+            ResolveSmtpListeners().Any(listener => listener.TlsMode != TlsMode.None)
+            || ResolveImapListeners().Any(listener => listener.TlsMode != TlsMode.None)
+            || Pop3TlsMode != TlsMode.None;
     }
 
 }
