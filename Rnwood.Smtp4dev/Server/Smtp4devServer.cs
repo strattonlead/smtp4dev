@@ -295,6 +295,30 @@ namespace Rnwood.Smtp4dev.Server
             }
         }
 
+        /// <summary>
+        /// The username a connection authenticated as, taken from the live session rather than
+        /// from the stored one, which does not record it.
+        ///
+        /// This is what lets a validation expression tell whose connection it is looking at
+        /// anywhere after AUTH. Before AUTH there is genuinely no answer, and null is the honest
+        /// one - an expression scoped to an account should not match a connection which has not
+        /// proved it owns that account.
+        /// </summary>
+        private static string AuthenticatedUserOf(IConnection connection)
+        {
+            if (connection?.Session?.Authenticated != true)
+            {
+                return null;
+            }
+
+            return connection.Session.AuthenticationCredentials switch
+            {
+                IAuthenticationCredentialsCanValidateWithPassword withPassword => withPassword.Username,
+                IAuthenticationCredentialsCanValidateWithToken withToken => withToken.Username,
+                _ => null,
+            };
+        }
+
         private Task OnCommandReceived(object sender, CommandEventArgs e)
         {
             if (!scriptingHost.HasValidateCommandExpression)
@@ -306,7 +330,7 @@ namespace Rnwood.Smtp4dev.Server
             Smtp4devDbContext dbContext = scope.ServiceProvider.GetService<Smtp4devDbContext>();
             Session dbSession = dbContext.Sessions.Find(activeSessionsToDbId[e.Connection.Session]);
 
-            var apiSession = new ApiModel.Session(dbSession);
+            var apiSession = new ApiModel.Session(dbSession) { AuthenticatedUser = AuthenticatedUserOf(e.Connection) };
 
             var errorResponse = scriptingHost.ValidateCommand(e.Command, apiSession, e.Connection);
 
@@ -324,7 +348,7 @@ namespace Rnwood.Smtp4dev.Server
             using var scope = serviceScopeFactory.CreateScope();
             Smtp4devDbContext dbContext = scope.ServiceProvider.GetService<Smtp4devDbContext>();
             var session = dbContext.Sessions.AsNoTracking().Single(s => s.Id == sessionId);
-            var apiSession = new ApiModel.Session(session);
+            var apiSession = new ApiModel.Session(session) { AuthenticatedUser = AuthenticatedUserOf(e.Connection) };
 
             if (!this.scriptingHost.ValidateRecipient(apiSession, e.Recipient, e.Connection))
             {
@@ -372,7 +396,7 @@ namespace Rnwood.Smtp4dev.Server
             Smtp4devDbContext dbContext = scope.ServiceProvider.GetService<Smtp4devDbContext>();
             Session dbSession = dbContext.Sessions.Find(activeSessionsToDbId[e.Connection.Session]);
 
-            var apiSession = new ApiModel.Session(dbSession);
+            var apiSession = new ApiModel.Session(dbSession) { AuthenticatedUser = AuthenticatedUserOf(e.Connection) };
 
             var errorResponse = scriptingHost.ValidateMessage(apiMessage, apiSession, e.Connection);
 
