@@ -64,6 +64,35 @@ public class TcpClientConnectionChannel : IConnectionChannel
     /// </summary>
     public bool IsConnected { get; private set; }
 
+    /// <inheritdoc />
+    public bool IsPeerDisconnected
+    {
+        get
+        {
+            if (!IsConnected)
+            {
+                return true;
+            }
+
+            try
+            {
+                Socket socket = tcpClient.Client;
+
+                //Readable with nothing to read is how a graceful close from the peer shows up.
+                //Buffered data means the peer is still there and has pipelined a command.
+                return socket == null || (socket.Poll(0, SelectMode.SelectRead) && socket.Available == 0);
+            }
+            catch (ObjectDisposedException)
+            {
+                return true;
+            }
+            catch (SocketException)
+            {
+                return true;
+            }
+        }
+    }
+
     /// <summary>
     ///     Gets or sets the ReceiveTimeout.
     /// </summary>
