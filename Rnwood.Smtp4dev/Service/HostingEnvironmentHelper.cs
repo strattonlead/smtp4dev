@@ -22,10 +22,14 @@ namespace Rnwood.Smtp4dev.Service
     public class HostingEnvironmentHelper : IHostingEnvironmentHelper
     {
         private readonly IHostEnvironment hostEnvironment;
-        private readonly IOptionsMonitor<CommandLineOptions> commandLineOptions;
+
+        // The command line is parsed once in Program before the host is built and registered as a
+        // singleton. Nothing configures IOptionsMonitor<CommandLineOptions>, so asking for one
+        // hands back a default instance with every option unset - see FORK-CHANGES.md FP13.
+        private readonly CommandLineOptions commandLineOptions;
         private readonly IOptionsMonitor<ServerOptions> serverOptions;
 
-        public HostingEnvironmentHelper(IHostEnvironment hostEnvironment, IOptionsMonitor<ServerOptions> serverOptions, IOptionsMonitor<CommandLineOptions> commandLineOptions)
+        public HostingEnvironmentHelper(IHostEnvironment hostEnvironment, IOptionsMonitor<ServerOptions> serverOptions, CommandLineOptions commandLineOptions)
         {
             this.hostEnvironment = hostEnvironment;
             this.commandLineOptions = commandLineOptions;
@@ -130,12 +134,12 @@ namespace Rnwood.Smtp4dev.Service
         {
             string dataDir;
 
-            if (!string.IsNullOrEmpty(commandLineOptions.CurrentValue.BaseAppDataPath))
+            if (!string.IsNullOrEmpty(commandLineOptions.BaseAppDataPath))
             {
                 // Explicit path always takes precedence
-                dataDir = commandLineOptions.CurrentValue.BaseAppDataPath;
+                dataDir = commandLineOptions.BaseAppDataPath;
             }
-            else if (commandLineOptions.CurrentValue.NoUserSettings)
+            else if (commandLineOptions.NoUserSettings)
             {
                 return null;
             }
@@ -145,7 +149,9 @@ namespace Rnwood.Smtp4dev.Service
             }
             else
             {
-                dataDir = Path.Join(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "smtp4dev");
+                // Must stay in step with DirectoryHelper.GetDataDir, which is the directory the
+                // settings file is read and watched from.
+                dataDir = DirectoryHelper.GetDataDir(commandLineOptions);
             }
             return Path.Join(dataDir, "appsettings.json");
         }

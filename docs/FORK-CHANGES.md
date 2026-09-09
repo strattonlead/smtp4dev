@@ -28,6 +28,7 @@ changes, change the section here in the same commit.
 | FP10 | `blocked_connections` gauge and a metrics endpoint | Landed `v3.3.0-p4` | `ScriptingHost.cs`, `Controllers/MetricsController.cs`, `ApiModel/Metrics.cs` + 1 test file |
 | FP11 | The authenticated user on the scripting session handle | Landed `v3.3.0-p5` | `ApiModel/Session.cs`, `Smtp4devServer.cs` + 1 test file |
 | FP12 | A credentials expression may have no opinion | Landed `v3.3.0-p6` | `ScriptingHost.cs` + 1 test file |
+| FP13 | Runtime settings are written where they are read from | Landed | `Service/HostingEnvironmentHelper.cs` + 1 test file |
 
 ## Versioning
 
@@ -455,3 +456,57 @@ credentials.Username === 'blocked' ? false : null
 another account authenticates normally, and a wrong password for that other account is still
 refused. The third is the one that matters - it is the assertion that fails if the null handling
 is lost, and its failure mode is the server accepting anything.
+
+## FP13 - Runtime settings are written where they are read from
+
+**Status:** landed with this change.
+
+### Why
+
+The settings file has a read path and a write path, and they were computed differently.
+
+The read path is `DirectoryHelper.GetDataDir(cmdLineOptions)`. `Program` uses it to pick the data
+directory, adds `<dataDir>/appsettings.json` to the configuration with `reloadOnChange: true`, and
+that watcher is what makes a settings change take effect.
+
+The write path is `HostingEnvironmentHelper.GetEditableSettingsFilePath()`, which read the same
+options through `IOptionsMonitor<CommandLineOptions>`. Nothing calls
+`services.Configure<CommandLineOptions>`. `Program` registers the parsed options as a plain
+singleton - `services.AddSingleton(cmdLineOptions)` - so the monitor hands back a **default
+instance with every option unset**.
+
+So `--baseappdatapath` moved the read path and left the write path behind. `POST /api/server`
+then wrote to `%APPDATA%/smtp4dev/appsettings.json` (or `$XDG_CONFIG_HOME` equivalent) while the
+watcher watched the directory that was actually asked for, and the setting never took effect. The
+API answers 200: the write really did happen, just not anywhere the server reads.
+
+`--nousersettings` was wrong in the same way and in the more dangerous direction. It is supposed to
+make `GetEditableSettingsFilePath()` return null, which is what turns `SettingsAreEditable` off.
+With the monitor it never saw the flag, so a server started with user settings explicitly disabled
+still reported its settings as editable and still wrote a settings file to the user profile.
+
+This matters beyond a stray file. Deployments which keep the settings file on an encrypted volume
+do it by pointing `--baseappdatapath` at that volume - and those are exactly the deployments whose
+settings file holds SMTP credentials. Before this change those credentials were written to the
+user profile instead, unencrypted, and the server ignored them.
+
+It was found by a front end which drives the engine entirely through `POST /api/server`: given
+`--baseappdatapath`, every write was accepted and none of them applied.
+
+### What changed
+
+`HostingEnvironmentHelper` takes the singleton `CommandLineOptions` rather than an
+`IOptionsMonitor` of it. The command line is parsed once before the host is built and cannot
+change while the process runs, so there was never anything for a monitor to observe.
+
+The default branch now calls `DirectoryHelper.GetDataDir` instead of repeating its body, so the
+two paths cannot drift apart again.
+
+### Rebase notes
+
+`EditableSettingsPathTests` pins the invariant directly: the directory settings are written to is
+the directory `DirectoryHelper.GetDataDir` reads them from, `--nousersettings` yields a null path,
+and settings are then not editable. If upstream reintroduces the monitor, the first two fail.
+
+`ServerController` already injected the concrete `CommandLineOptions` alongside the `MapOptions`,
+so the singleton was always the intended source and this only brings the helper in line.
