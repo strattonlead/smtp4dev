@@ -208,6 +208,49 @@ namespace Rnwood.Smtp4dev.Controllers
             return lockedSettings;
         }
 
+        /// <summary>
+        /// Rejects a settings write whose validation expressions do not parse.
+        ///
+        /// Without this the write succeeds and <see cref="ScriptingHost.ParseScript"/> then fails
+        /// silently: it logs, sets the script to null, and the hook is disabled from that moment
+        /// on. The caller gets a 200 and no indication that its rules stopped applying, and
+        /// because the expressions are a single global value per hook, one bad write disables the
+        /// hook for every client of the server, not just the one that made it.
+        ///
+        /// Parsing here uses the same parser <see cref="ScriptingHost"/> uses, in the same
+        /// process, so an expression which passes this check cannot fail there.
+        /// </summary>
+        private ActionResult ValidateExpressions(ApiModel.Server serverUpdate)
+        {
+            (string Name, string Expression)[] expressions =
+            {
+                (nameof(serverUpdate.CredentialsValidationExpression), serverUpdate.CredentialsValidationExpression),
+                (nameof(serverUpdate.RecipientValidationExpression), serverUpdate.RecipientValidationExpression),
+                (nameof(serverUpdate.MessageValidationExpression), serverUpdate.MessageValidationExpression),
+                (nameof(serverUpdate.CommandValidationExpression), serverUpdate.CommandValidationExpression),
+            };
+
+            foreach ((string name, string expression) in expressions)
+            {
+                if (string.IsNullOrWhiteSpace(expression))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    new Esprima.JavaScriptParser().ParseScript(expression);
+                }
+                catch (Esprima.ParserException e)
+                {
+                    return BadRequest(
+                        $"{ConvertPropertyNameToJsonCasing(name)} is not valid JavaScript and was not saved: {e.Message}");
+                }
+            }
+
+            return null;
+        }
+
         private static string ConvertPropertyNameToJsonCasing(string propertyName)
         {
             return string.Join('.', propertyName.Split('.').Select(p => p[..1].ToLower() + p[1..]));
@@ -227,6 +270,12 @@ namespace Rnwood.Smtp4dev.Controllers
             if (!hostingEnvironmentHelper.SettingsAreEditable)
             {
                 return Unauthorized("Settings are locked");
+            }
+
+            ActionResult expressionError = ValidateExpressions(serverUpdate);
+            if (expressionError != null)
+            {
+                return expressionError;
             }
 
             var currentSettings = GetServer();
