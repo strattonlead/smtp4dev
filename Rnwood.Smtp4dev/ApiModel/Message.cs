@@ -27,6 +27,8 @@ namespace Rnwood.Smtp4dev.ApiModel
             SecureConnection = dbMessage.SecureConnection;
             SessionEncoding = dbMessage.SessionEncoding;
             EightBitTransport = dbMessage.EightBitTransport;
+            MailboxName = dbMessage.Mailbox?.Name;
+            SessionId = dbMessage.Session?.Id;
 
             Parts = new List<MessageEntitySummary>(1);
             RelayError = dbMessage.RelayError;
@@ -256,6 +258,26 @@ namespace Rnwood.Smtp4dev.ApiModel
         public DateTime ReceivedDate { get; set; }
 
         public bool SecureConnection { get; set; }
+
+        /// <summary>
+        /// The mailbox this message was delivered to.
+        ///
+        /// A message id is resolved across every mailbox, so without this a caller which holds an
+        /// id has no way to tell whose mailbox it landed in. A multi tenant front end needs
+        /// exactly that to answer "may this caller read this message" without walking every
+        /// mailbox it owns.
+        /// </summary>
+        public string MailboxName { get; set; }
+
+        /// <summary>
+        /// The SMTP session this message arrived on, or null for a message which did not arrive
+        /// over SMTP.
+        ///
+        /// The relation already exists in the database; it was simply never projected, so the
+        /// session log endpoint could not be reached from a message. Session ids are the only way
+        /// to tie a transcript to the message it produced.
+        /// </summary>
+        public Guid? SessionId { get; set; }
 
         public string Subject { get; set; }
 

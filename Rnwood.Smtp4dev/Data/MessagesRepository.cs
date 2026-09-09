@@ -64,7 +64,10 @@ namespace Rnwood.Smtp4dev.Data
 
         public IQueryable<Message> GetAllMessages(bool unTracked = true)
         {
-            var query = dbContext.Messages;
+            // The mailbox and the session are what let a caller holding a message id tell whose
+            // mailbox it landed in and which transcript produced it. Both relations already
+            // existed; neither was ever loaded, so ApiModel.Message could not project them.
+            var query = dbContext.Messages.Include(m => m.Mailbox).Include(m => m.Session);
             return unTracked ? query.AsNoTracking() : query;
         }
 
