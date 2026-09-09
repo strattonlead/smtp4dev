@@ -151,3 +151,81 @@ jobs:
           set -euo pipefail
           tag="${GITHUB_REF#refs/tags/}"
           gh release create "$tag" dist/* --title "$tag" --generate-notes
+
+  docker:
+    name: Docker image
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: Rnwood.Smtp4dev/ClientApp/package-lock.json
+
+      - name: Publish framework dependent build
+        # Dockerfile.linux runs on the aspnet runtime image and expects the published output in
+        # ./out, so this is a plain framework dependent publish rather than the self contained
+        # single file publish the release binaries use.
+        run: |
+          set -euo pipefail
+          version_arg=()
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version_arg=("-p:Version=${GITHUB_REF#refs/tags/v}")
+          fi
+          dotnet publish Rnwood.Smtp4dev/Rnwood.Smtp4dev.csproj \
+            -c Release \
+            "${version_arg[@]}" \
+            -o out
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tag
+        id: meta
+        run: |
+          set -euo pipefail
+          # Tags are immutable and always exact. There is deliberately no latest and no main tag:
+          # a moving engine tag makes a downstream deployment irreproducible.
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "tag=ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+            echo "push=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=ghcr.io/${GITHUB_REPOSITORY,,}:ci-${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+            echo "push=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.linux
+          platforms: linux/amd64,linux/arm64
+          push: ${{ steps.meta.outputs.push == 'true' }}
+          tags: ${{ steps.meta.outputs.tag }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=BSD-3-Clause
+            org.opencontainers.image.description=smtp4dev, patched for Deadletter. See docs/FORK-CHANGES.md.
+            smtp4dev.upstream.ref=${{ github.ref_name }}
