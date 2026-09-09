@@ -96,7 +96,9 @@ namespace Rnwood.Smtp4dev.Data
                     IsUnread = m.IsUnread,
                     HasBareLineFeed = m.HasBareLineFeed,
                     MimeMetadata = m.MimeMetadata,
-                    BodyText = m.BodyText
+                    BodyText = m.BodyText,
+                    // There is no scalar key on the model, only the navigation, so go through it.
+                    SessionId = m.Session != null ? m.Session.Id : (Guid?)null
                 }).AsNoTracking();
         }
 

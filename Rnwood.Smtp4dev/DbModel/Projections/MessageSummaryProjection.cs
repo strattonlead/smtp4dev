@@ -16,4 +16,10 @@ public class MessageSummaryProjection
     public bool HasBareLineFeed { get; set; }
     public string MimeMetadata { get; set; }
     public string BodyText { get; set; }
+
+    /// <summary>
+    /// Null when nothing delivered the message over SMTP - an injected message has no session,
+    /// and that absence is the only signal a listing has.
+    /// </summary>
+    public Guid? SessionId { get; set; }
 }

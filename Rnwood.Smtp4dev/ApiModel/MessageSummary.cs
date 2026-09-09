@@ -21,6 +21,7 @@ namespace Rnwood.Smtp4dev.ApiModel
             IsRelayed = dbMessage.Relays.Count > 0;
             DeliveredTo = dbMessage.DeliveredTo ?? "";
             HasWarnings = dbMessage.HasBareLineFeed;
+            SessionId = dbMessage.Session?.Id;
         }
         
         public MessageSummary(DbModel.Projections.MessageSummaryProjection messagesSummaryProjection)
@@ -41,6 +42,8 @@ namespace Rnwood.Smtp4dev.ApiModel
 
             HasWarnings = messagesSummaryProjection.HasBareLineFeed
             || (mimeMetadata?.HasDuplicatedContentIds.GetValueOrDefault() ?? false);
+
+            SessionId = messagesSummaryProjection.SessionId;
         }
 
         public bool IsRelayed { get; set; }
@@ -58,6 +61,12 @@ namespace Rnwood.Smtp4dev.ApiModel
         public bool IsUnread { get; set; }
 
         public bool HasWarnings { get; set; }
+
+        /// <summary>
+        /// The SMTP session which delivered this message, or null when nothing did - a message
+        /// put here by IMAP APPEND has no session, and a listing has no other way to tell.
+        /// </summary>
+        public Guid? SessionId { get; set; }
 
         [JsonIgnore]
         string ICacheByKey.CacheKey => Id.ToString() + IsUnread + IsRelayed + HasWarnings + "v5";

@@ -46,12 +46,71 @@ namespace Rnwood.Smtp4dev.Server
 
             private void Session_Create(object sender, IMAP_e_Folder e)
             {
-                e.Response = new IMAP_r_ServerStatus(e.Response.CommandTag, "NO", "Folders are not supported");
+                try
+                {
+                    using var scope = this.serviceScopeFactory.CreateScope();
+                    var messagesRepository = scope.ServiceProvider.GetService<IMessagesRepository>();
+                    var dbContext = messagesRepository?.DbContext;
+                    if (dbContext == null)
+                    {
+                        e.Response = new IMAP_r_ServerStatus(e.Response.CommandTag, "NO", "Database not available");
+                        return;
+                    }
+
+                    string mailboxName = GetMailboxName();
+                    var mailbox = dbContext.Mailboxes.Include(m => m.MailboxFolders)
+                        .FirstOrDefault(m => m.Name == mailboxName);
+                    if (mailbox == null)
+                    {
+                        e.Response = new IMAP_r_ServerStatus(e.Response.CommandTag, "NO", "No such mailbox");
+                        return;
+                    }
+
+                    if (mailbox.MailboxFolders.Any(f => f.Name == e.Folder))
+                    {
+                        e.Response = new IMAP_r_ServerStatus(e.Response.CommandTag, "NO", "[ALREADYEXISTS] Folder exists");
+                        return;
+                    }
+
+                    dbContext.MailboxFolders.Add(new MailboxFolder { Name = e.Folder, Mailbox = mailbox });
+                    dbContext.SaveChanges();
+
+                    log.Information("Created IMAP folder {folder} in mailbox {mailboxName}", e.Folder, mailboxName);
+                }
+                catch (Exception ex)
+                {
+                    log.Error(ex, "Error creating folder {folder}", e.Folder);
+                    e.Response = new IMAP_r_ServerStatus(e.Response.CommandTag, "NO", "Internal server error creating folder");
+                }
+            }
+
+            /// <summary>
+            /// Whether the authenticated mailbox has this folder. APPEND used to test two hard
+            /// coded names, although the database models any number of them.
+            /// </summary>
+            private bool FolderExists(string folderName)
+            {
+                if (string.IsNullOrEmpty(folderName))
+                {
+                    return false;
+                }
+
+                using var scope = this.serviceScopeFactory.CreateScope();
+                var messagesRepository = scope.ServiceProvider.GetService<IMessagesRepository>();
+                var dbContext = messagesRepository?.DbContext;
+                if (dbContext == null)
+                {
+                    return false;
+                }
+
+                string mailboxName = GetMailboxName();
+
+                return dbContext.MailboxFolders.Any(f => f.Mailbox.Name == mailboxName && f.Name == folderName);
             }
 
             private void Session_Append(object sender, IMAP_e_Append e)
             {
-                if (e.Folder == "Sent" || e.Folder == "INBOX")
+                if (FolderExists(e.Folder))
                 {
                     // Provide a memory stream for the IMAP server to write message data to
                     var messageStream = new MemoryStream();
@@ -158,7 +217,9 @@ namespace Rnwood.Smtp4dev.Server
                 }
                 else
                 {
-                    e.Response = new IMAP_r_ServerStatus(e.Response.CommandTag, "NO", $"Folder '{e.Folder}' not supported");
+                    // RFC 3501 6.3.11: TRYCREATE tells the client the fix is CREATE, then retry.
+                    e.Response = new IMAP_r_ServerStatus(
+                        e.Response.CommandTag, "NO", $"[TRYCREATE] No folder '{e.Folder}' in this mailbox");
                 }
             }
 

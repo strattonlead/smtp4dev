@@ -2683,9 +2683,14 @@ namespace LumiSoft.Net.IMAP.Server
             
             if(e.Response.IsError){
                 m_pResponseSender.SendResponseAsync(e.Response);
+                // The client is waiting on a synchronizing literal and will not send it after a
+                // tagged NO, so there is nothing to drain - but the session must go on reading
+                // commands. Without this a refusal is terminal and the client sees a reset.
+                BeginReadCmd();
             }
             else if(e.Stream == null){
                 m_pResponseSender.SendResponseAsync(new IMAP_r_ServerStatus(cmdTag,"NO","Internal server error: No storage stream available."));
+                BeginReadCmd();
             }
             else{
                 m_pResponseSender.SendResponseAsync(new IMAP_r_ServerStatus("+","Ready for literal data."));

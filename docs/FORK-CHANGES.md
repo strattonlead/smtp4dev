@@ -29,6 +29,7 @@ changes, change the section here in the same commit.
 | FP11 | The authenticated user on the scripting session handle | Landed `v3.3.0-p5` | `ApiModel/Session.cs`, `Smtp4devServer.cs` + 1 test file |
 | FP12 | A credentials expression may have no opinion | Landed `v3.3.0-p6` | `ScriptingHost.cs` + 1 test file |
 | FP13 | Runtime settings are written where they are read from | Landed `v3.3.0-p7` | `Service/HostingEnvironmentHelper.cs` + 1 test file |
+| FP14 | APPEND into any folder, a survivable refusal, and the session id on a summary | Landed | `IMAP_Session.cs`, `Imap/SessionHandler.cs`, `MessageSummaryProjection.cs`, `MessagesRepository.cs`, `ApiModel/MessageSummary.cs` + 1 test file |
 
 ## Versioning
 
@@ -510,3 +511,68 @@ and settings are then not editable. If upstream reintroduces the monitor, the fi
 
 `ServerController` already injected the concrete `CommandLineOptions` alongside the `MapOptions`,
 so the singleton was always the intended source and this only brings the helper in line.
+
+## FP14 - APPEND into any folder, a survivable refusal, and the session id on a summary
+
+**Status:** landed with this change.
+
+### Why
+
+Three things, all found while building a front end that injects mail rather than only reading it.
+
+**APPEND accepted two folder names.** `Session_Append` opened with `if (e.Folder == "Sent" ||
+e.Folder == "INBOX")`, although the database models any number of folders, `Message` already has a
+`MailboxFolderId`, and `GET /api/messages/folders` already lists whatever a mailbox has. The body
+of the handler then looks the folder up in the database anyway, so the hard coded test was the
+only thing in the way. `CREATE` answered `NO Folders are not supported`, so there was also no way
+to make one.
+
+**Refusing an APPEND killed the connection.** This is the serious half. In `IMAP_Session.APPEND`:
+
+```csharp
+if(e.Response.IsError){
+    m_pResponseSender.SendResponseAsync(e.Response);
+}
+```
+
+The tagged `NO` goes out and `BeginReadCmd()` is never called, so the session stops reading
+commands. The client gets its refusal and then a reset on the next command - or a hang, depending
+on timing. Nothing is logged server side, because as far as the handler is concerned it answered
+correctly.
+
+The failure mode is worth stating plainly: **a client which asks for a folder that does not exist
+loses its connection**, and everything about it looks like a network fault rather than a refusal.
+The same path is taken when no storage stream is available, so an internal error had the same
+effect.
+
+**A message summary could not say where it came from.** `GET /api/messages` returned no link to
+the SMTP session that delivered a message. FP8 put `SessionId` on the full message, which answers
+the question one message at a time; a client showing a list needs it once per row and would
+otherwise fetch every message in full to learn it. It matters because the absence of a session is
+the only thing distinguishing a message that was injected from one that arrived over the wire -
+`APPEND` emits no `APPENDUID` (the server side never implemented UIDPLUS), so nothing else about
+the delivery is observable afterwards.
+
+### What changed
+
+`IMAP_Session.APPEND` calls `BeginReadCmd()` on both failure paths, so a refusal is an answer
+rather than the end of the session.
+
+`Session_Append` accepts any folder the authenticated mailbox has, and refuses the rest with
+`NO [TRYCREATE] ...`, which is what RFC 3501 says to send and tells a client the fix is `CREATE`.
+
+`Session_Create` creates the folder on the authenticated mailbox, or answers `NO [ALREADYEXISTS]`.
+
+`MessageSummaryProjection`, `MessagesRepository.GetMessageSummaries` and `ApiModel.MessageSummary`
+carry `SessionId`. There is no scalar key on `DbModel.Message`, only the navigation, so the
+projection reads `m.Session != null ? m.Session.Id : (Guid?)null`.
+
+### Rebase notes
+
+`ImapAppendTests` drives real IMAP over a real socket for all of it: APPEND into INBOX succeeds,
+APPEND into a folder that does not exist answers `NO [TRYCREATE]`, **the connection still answers
+a NOOP afterwards**, a folder created with CREATE can then be appended to, and an appended
+message has a null `SessionId` on its summary.
+
+The third is the one that fails if the `BeginReadCmd()` calls are lost in a rebase, and it fails
+as a timeout rather than an assertion, which is worth knowing before hunting it.
