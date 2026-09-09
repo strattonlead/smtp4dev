@@ -146,9 +146,15 @@ namespace Rnwood.Smtp4dev.Server
                         $"IMAP listener on port {listener.Port} asks for TLS mode {listener.TlsMode} but no certificate could be resolved.");
                 }
 
+                //Only a listener which actually offers TLS gets the certificate. IMAP_Session
+                //advertises STARTTLS whenever its certificate is non null, so handing one to a
+                //plaintext listener would make it offer an upgrade its configuration did not ask
+                //for - and clients connecting with SecureSocketOptions.Auto would take it.
+                X509Certificate2 listenerCertificate = sslMode == SslMode.None ? null : certificate;
+
                 foreach (System.Net.IPAddress address in BindAddressesFor(options, bindAddress))
                 {
-                    bindings.Add(new IPBindInfo(options.HostName, BindInfoProtocol.TCP, address, listener.Port, sslMode, certificate));
+                    bindings.Add(new IPBindInfo(options.HostName, BindInfoProtocol.TCP, address, listener.Port, sslMode, listenerCertificate));
                 }
             }
 
