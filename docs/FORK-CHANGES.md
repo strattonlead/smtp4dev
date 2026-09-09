@@ -29,7 +29,7 @@ changes, change the section here in the same commit.
 | FP11 | The authenticated user on the scripting session handle | Landed `v3.3.0-p5` | `ApiModel/Session.cs`, `Smtp4devServer.cs` + 1 test file |
 | FP12 | A credentials expression may have no opinion | Landed `v3.3.0-p6` | `ScriptingHost.cs` + 1 test file |
 | FP13 | Runtime settings are written where they are read from | Landed `v3.3.0-p7` | `Service/HostingEnvironmentHelper.cs` + 1 test file |
-| FP14 | APPEND into any folder, a survivable refusal, and the session id on a summary | Landed | `IMAP_Session.cs`, `Imap/SessionHandler.cs`, `MessageSummaryProjection.cs`, `MessagesRepository.cs`, `ApiModel/MessageSummary.cs` + 1 test file |
+| FP14 | APPEND into any folder, a survivable refusal, and the session id on a summary | Landed `v3.3.0-p8` | `IMAP_Session.cs`, `Imap/SessionHandler.cs`, `MessageSummaryProjection.cs`, `MessagesRepository.cs`, `ApiModel/MessageSummary.cs` + 1 test file |
 
 ## Versioning
 
@@ -514,7 +514,7 @@ so the singleton was always the intended source and this only brings the helper 
 
 ## FP14 - APPEND into any folder, a survivable refusal, and the session id on a summary
 
-**Status:** landed with this change.
+**Status:** landed, released as `v3.3.0-p8`.
 
 ### Why
 
