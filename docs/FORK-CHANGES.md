@@ -27,6 +27,7 @@ changes, change the section here in the same commit.
 | FP9 | Reject a settings write whose expressions do not parse | Landed `v3.3.0-p4` | `Controllers/ServerController.cs` + 1 test file |
 | FP10 | `blocked_connections` gauge and a metrics endpoint | Landed `v3.3.0-p4` | `ScriptingHost.cs`, `Controllers/MetricsController.cs`, `ApiModel/Metrics.cs` + 1 test file |
 | FP11 | The authenticated user on the scripting session handle | Landed `v3.3.0-p5` | `ApiModel/Session.cs`, `Smtp4devServer.cs` + 1 test file |
+| FP12 | A credentials expression may have no opinion | Landed | `ScriptingHost.cs` + 1 test file |
 
 ## Versioning
 
@@ -405,3 +406,52 @@ rule naming one of them rejects only that one. If an upstream refactor rebuilds 
 somewhere new and forgets to attach the user, that test fails rather than the scoping silently
 widening to everybody - which is the failure mode that matters, and the one that would otherwise
 look like the rule simply working.
+
+## FP12 - A credentials expression may have no opinion
+
+**Status:** landed with this change.
+
+### Why
+
+`ValidateCredentials` returns `AuthenticationResult?`, and the caller already treats null as "no
+opinion, do the normal check". The expression could never produce null: whatever it evaluated to
+was coerced with `AsBoolean()` and turned into Success or Failure.
+
+That made the hook all or nothing. The moment any expression exists it replaces password
+validation for the entire server, so an expression which rejects one account has to return
+something for every other account - and the only thing it can return is a boolean, where true
+means **authenticated**, not "carry on checking".
+
+The consequence is worth stating plainly. An expression written to fail one login, of the obvious
+shape
+
+```js
+credentials.Username === 'blocked' ? false : true
+```
+
+**silently accepts every other login with any password at all.** It reads like a targeted rule and
+behaves like turning authentication off. For a server hosting more than one account that is not a
+misfeature, it is an outage of the only thing keeping accounts apart.
+
+This was found by running a multi tenant front end against the engine: installing a single
+"reject this account's login" rule made the server accept a deliberately wrong password for a
+different account.
+
+### What changed
+
+A `null` or `undefined` result now means the expression has no opinion, and the normal user and
+password check decides. Anything else still coerces to a boolean exactly as before, so an
+expression which returns true or false keeps its old meaning.
+
+The safe shape for a targeted rule is now:
+
+```js
+credentials.Username === 'blocked' ? false : null
+```
+
+### Rebase notes
+
+`CredentialsExpressionTests` drives real SMTP for three cases: the named account is rejected,
+another account authenticates normally, and a wrong password for that other account is still
+refused. The third is the one that matters - it is the assertion that fails if the null handling
+is lost, and its failure mode is the server accepting anything.
