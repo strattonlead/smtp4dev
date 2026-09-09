@@ -22,6 +22,7 @@ changes, change the section here in the same commit.
 | FP4 | Cancellable `delay()` | Landed | `ScriptingHost.cs`, `IConnection.cs`, `Connection.cs`, `IConnectionChannel.cs`, `TcpClientConnectionChannel.cs`, `TestMocks.cs` + 1 test file |
 | FP5 | GHCR container image | Landed | `.github/workflows/build.yml`, `Dockerfile.linux` |
 | FP6 | Nightly workflow for excluded tests | Landed | `.github/workflows/nightly.yml` |
+| FP7 | Remove the upstream CLA workflow | Landed | `.github/workflows/cla.yml` (deleted) |
 
 ## Versioning
 
@@ -240,3 +241,27 @@ failing does not hide the other. The WebUI job installs Chromium first.
 The Deadletter maintainer of this fork. A red nightly is triaged before the next rebase, not
 after: the rebase checklist in the Deadletter spec §3.3 requires a green nightly before a new
 patch tag is published.
+
+## FP7 - Remove the upstream CLA workflow
+
+**Status:** landed with this change.
+
+### Why
+
+`.github/workflows/cla.yml` is upstream's contributor licence agreement bot. It points at
+`rnwood/smtp4dev`'s CLA document and stores signatures on a `clas` branch which does not exist
+here, so it failed on every pull request in this fork with "Committers of pull request N have to
+sign the CLA".
+
+No CLA applies to this fork. That agreement is triggered by opening a pull request against
+`rnwood/smtp4dev`, and this fork is never contributed upstream. Meanwhile a check which is red on
+every pull request regardless of the change is worse than no check: the fork's own CI is the only
+regression net there is, and a permanently failing job trains everyone to ignore the summary it
+appears in.
+
+`CLA.md` is left in place - it is part of the upstream history and costs nothing.
+
+### What changed
+
+The workflow file is deleted. If this fork ever does contribute upstream, the contributor signs
+the CLA on the upstream pull request, which is where the bot actually runs.
